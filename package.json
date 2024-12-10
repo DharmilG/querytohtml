@@ -1,0 +1,14 @@
+{
+  "name": "query-to-html",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Save the first ten web pages from a search query as local HTML files and a ZIP.",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}
