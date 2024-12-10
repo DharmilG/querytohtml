@@ -1,0 +1,179 @@
+# Query to HTML
+
+Type a search query. Get ten real web pages saved as HTML files in a fresh folder. Download the whole folder as a ZIP if you want.
+
+That is the whole app. This README explains it slowly, in normal words, so you never have to guess what the code is trying to do.
+
+## Why this exists
+
+Sometimes you want the pages themselves, not just a list of links. You want to open them later, search inside them, keep them for a project, or hand them to somebody else. A browser bookmark does not do that. A screenshot does not do that. You need the actual HTML.
+
+This tool does the boring part for you. You give it one question. It finds the first ten useful pages, copies their HTML, and puts each copy in its own file. Every run gets a new folder, so nothing from yesterday gets overwritten by today.
+
+## The idea in one sentence
+
+You type a question, and the app answers with a folder of ten saved web pages plus a ZIP you can carry away.
+
+## What you need
+
+- **Node.js 18 or newer.** Check with `node --version`.
+- **An internet connection**, because the app has to search and fetch pages.
+
+You do not need an API key. You do not need a paid account. You do not need to install any packages — the app uses only what Node.js already includes.
+
+## Run it on your computer
+
+Open a terminal in this folder and type:
+
+```bash
+node app.js
+```
+
+Then open your browser and go to:
+
+```
+http://localhost:3000
+```
+
+If port 3000 is already busy, give it another port:
+
+```bash
+# macOS / Linux
+PORT=4000 node app.js
+
+# Windows PowerShell
+$env:PORT=4000; node app.js
+```
+
+Then open `http://localhost:4000` instead.
+
+## The two screens
+
+The app has exactly two screens. Nothing else.
+
+### Screen 1 — Search
+
+This is where you work.
+
+- A box for your query.
+- A **Run** button.
+- A **Save location** box. It appears each run when the setting "Ask location each run" is on. When the setting is off, the app quietly reuses the last folder you chose.
+- A progress line, like `Fetching 4/10…`, so you know it is alive.
+- A list of the ten files with a status for each one. A failed page still gets a small stub file, so the count stays at ten.
+- A **Download ZIP** button.
+- A **Settings** link.
+
+### Screen 2 — Settings
+
+This is where you decide how the app behaves. The choices are saved in your browser, so they are still there next time.
+
+| Setting | What it does | Default |
+| --- | --- | --- |
+| Base folder | Where new run folders are created | `E:\query-to-html\downloads` |
+| Ask location each run | Shows the Save location box before every run | on |
+| Auto-use last folder | Remembers the folder and skips the question | off |
+| Results per run | How many pages to save | 10 |
+| Search source | Where results come from | Google with DuckDuckGo fallback |
+| Timeout | How long to wait on one slow page | 15 seconds |
+| Save manifest.json | Writes a small report of the run | on |
+| Add base tag | Keeps relative links and images working offline | on |
+
+"Auto-use last folder" wins over "Ask location each run" when both are on. Think of it as saying: stop asking, you already know where to put things.
+
+## What happens when you press Run
+
+Here is the whole story, in order.
+
+1. The app reads your query and your chosen folder. It makes sure the folder exists.
+2. It creates a new subfolder with your query and the current time in the name. This is why no run ever lands on top of another run.
+3. It asks Google for results. If Google shows a CAPTCHA or refuses, it tries DuckDuckGo instead, without bothering you.
+4. It collects ten different page addresses. If the first results page does not give ten, it asks for one more page.
+5. For each address, it downloads the raw HTML with a normal browser identity, follows redirects, and stops after 15 seconds or 5 MB. Nothing is executed, and no scripts on those pages are run.
+6. It writes `01-page.html` through `10-page.html`. A small `<base>` tag is added so pictures and links that use relative paths still point to the right place when you open the file offline.
+7. It writes `manifest.json` with the query, the source addresses, the time, and whether each file worked.
+8. The screen shows you the files. When you press **Download ZIP**, the app builds a ZIP and sends it to your browser.
+
+One failed page does not ruin the run. You still get ten files, and the manifest tells you which one could not be fetched.
+
+## Where the files go
+
+A run looks like this:
+
+```
+E:\query-to-html\downloads\
+└── typescript-generics_20261124-143022\
+    ├── 01-typescript-lang-org.html
+    ├── 02-example-com.html
+    ├── 03-another-site-net.html
+    ├── ...
+    ├── 10-last-site-io.html
+    ├── manifest.json
+    └── typescript-generics_20261124-143022.zip
+```
+
+The folder name has two parts. The first part is your query, cleaned up so it is safe to use as a name. The second part is the date and time down to the second. Run the same query twice and you still get two different folders.
+
+## A short note about search engines
+
+Google does not like programs that search on its behalf. If it thinks you are a robot, it shows a CAPTCHA instead of results. That is normal, and it is not a bug in this app.
+
+So the app tries Google first. If Google blocks the request, the app quietly switches to DuckDuckGo's simple HTML results. You still get ten pages, just from a different search engine. The screen tells you which source was used, so you are never confused about where the links came from.
+
+If you want only one source, change **Search source** in Settings. A paid search API is also supported if you later decide you need guaranteed Google results.
+
+## About HTML in this project
+
+You will not find an `.html` file in this repository. That is intentional, and it is worth understanding.
+
+The app has a real, visual interface — a page with inputs, buttons, progress, and a settings screen. That interface is written in HTML, but it lives inside `app.js` as a template string. Node.js serves that string to your browser when you open `http://localhost:3000`. Your browser sees ordinary HTML and draws the two screens. You never have to open an HTML file to use the app.
+
+Keeping the HTML inside `app.js` gives us one source file to run and one thing to copy around. It also means there is no build step and no second file to keep in sync with the server.
+
+If you ever want to change how the interface looks, open `app.js` and find the page template near the top. Everything between its backticks is the page your browser sees: the CSS is in a `<style>` block and the button logic is in a `<script>` block at the bottom of that same string. Change it there, save, restart the server, and refresh the browser.
+
+So: HTML is used for the interface, but no separate HTML file is required, and none is used to run the project.
+
+## Running it for free on the internet
+
+You can run this on your own machine for free, forever. You can also put it on the internet for free. Both are fine, but they are not the same.
+
+On your own machine, the app can write into folders you choose on your computer. That is the full version of the feature.
+
+Once the app is hosted somewhere else, it writes to that server's disk, not to your computer. You still get everything through the **Download ZIP** button, but the "Save location" box now means a folder on the server. Search engines also block cloud addresses more often than home addresses, so the DuckDuckGo fallback earns its keep.
+
+A simple free route is Render's free web service:
+
+1. Push this repository to GitHub.
+2. On Render, choose **New → Web Service** and select the repository.
+3. Leave the runtime as Node, leave the build command empty, and use `npm start` as the start command.
+4. Add a `PORT` environment variable only if the host does not set one for you.
+5. Deploy, then open the address Render gives you.
+
+For an always-on machine with a real disk, Oracle Cloud's Always Free virtual machine is another option. It asks more of you — SSH, a firewall, and HTTPS setup — but it behaves like a small server you control. It never falls asleep, which Render's free tier does.
+
+Free plans change. Check the provider's current page before you commit to one.
+
+## How the code is put together
+
+Small pieces, each with one job:
+
+- **`app.js`** — the entire application. It holds the page template, the HTTP server, the search, the page fetcher, the file writer, and the ZIP builder. Functions are kept small on purpose so you can read one at a time.
+- **`package.json`** — a start script and nothing else. It tells a host how to launch the app. It has no dependencies.
+
+The ZIP is built by Node itself, not by an operating-system command. That means the same file works on Windows, macOS, and Linux without changes.
+
+Your settings live in the browser's local storage. There is no database and no account to create.
+
+## If something goes wrong
+
+| What you see | What to do |
+| --- | --- |
+| `EADDRINUSE` | Another program owns port 3000. Use the `PORT` trick shown above. |
+| A CAPTCHA message | Google blocked this run. Wait a moment and try again, or pick DuckDuckGo in Settings. |
+| A file says "could not fetch" | That website refused the request. The manifest lists it. Try the query again later. |
+| The ZIP looks empty | Wait until the run finishes before downloading. Build it again with the button. |
+| Fewer than ten files | Check Results per run in Settings; it may have been changed. |
+
+## Where to go next
+
+Read `app.js` from top to bottom once. It is one file, and the order is the same order as this README: settings first, then search, then saving, then the ZIP, then the server that ties it together. When you want to change something, find the matching section and change only that piece.
