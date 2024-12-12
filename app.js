@@ -61,4 +61,27 @@ function resolveInside(base, ...parts) {
   return target;
 }
 
-module.exports = { slugify, resolveInside };
+/**
+ * Build the name of one run's folder: safe query plus a timestamp.
+ *
+ * Two runs of the same query must never share a folder. The time is added
+ * down to the second, so each run gets its own place to put files. A Date
+ * can be passed in, which makes the function easy to test.
+ *
+ * @param {string} query - the search query
+ * @param {Date} now - time to use (defaults to the current moment)
+ * @returns {string} folder name such as "typescript-generics_20261124-143002"
+ */
+function runFolderName(query, now = new Date()) {
+  const pad = (number) => String(number).padStart(2, '0');
+  const date = [
+    now.getFullYear(),
+    pad(now.getMonth() + 1),
+    pad(now.getDate()),
+  ].join('');
+  const time = [pad(now.getHours()), pad(now.getMinutes()), pad(now.getSeconds())].join('');
+
+  return `${slugify(query)}_${date}-${time}`;
+}
+
+module.exports = { slugify, resolveInside, runFolderName };
