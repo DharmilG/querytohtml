@@ -1,5 +1,7 @@
 'use strict';
 
+const path = require('node:path');
+
 // app.js — Query to HTML
 //
 // This file is the whole application. It is built one small function at a
@@ -36,4 +38,27 @@ function slugify(input, maxLength = 48) {
   return name;
 }
 
-module.exports = { slugify };
+/**
+ * Resolve a path inside a chosen base folder and refuse anything outside it.
+ *
+ * The app accepts a folder from the browser. That is user input, so it must
+ * not be trusted blindly: a name with ".." or a full drive path could point
+ * somewhere the user never chose. This function resolves the final path and
+ * checks that it still sits under the base before returning it.
+ *
+ * @param {string} base - the folder the user chose
+ * @param {...string} parts - path pieces to add under that folder
+ * @returns {string} the resolved absolute path
+ */
+function resolveInside(base, ...parts) {
+  const root = path.resolve(base);
+  const target = path.resolve(root, ...parts);
+
+  if (target !== root && !target.startsWith(root + path.sep)) {
+    throw new Error('That path is outside the chosen download folder');
+  }
+
+  return target;
+}
+
+module.exports = { slugify, resolveInside };
