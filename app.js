@@ -84,4 +84,97 @@ function runFolderName(query, now = new Date()) {
   return `${slugify(query)}_${date}-${time}`;
 }
 
-module.exports = { slugify, resolveInside, runFolderName };
+/**
+ * Turn HTML entities into the characters they stand for.
+ *
+ * Search pages rarely hand us clean links. They escape "&" as "&amp;" and
+ * quotes as "&quot;". There is no browser DOM in Node, so this small
+ * replacement chain does the decoding before we parse a URL.
+ *
+ * @param {string} text - text taken out of HTML
+ * @returns {string} the same text with entities decoded
+ */
+function decodeHtmlEntities(text) {
+  return String(text ?? '')
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, decimal) => String.fromCodePoint(Number(decimal)))
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&(?:#39|apos);/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&nbsp;/gi, ' ');
+}
+
+/**
+ * Pull every href value out of the anchor tags in an HTML page.
+ *
+ * @param {string} html - a page of search results
+ * @returns {string[]} raw href values, still escaped
+ */
+function extractHrefs(html) {
+  const hrefs = [];
+  const anchor = /<a\b[^>]*?\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+  let match;
+
+  while ((match = anchor.exec(String(html ?? ''))) !== null) {
+    hrefs.push(match[1] ?? match[2] ?? match[3] ?? '');
+  }
+
+  return hrefs;
+}
+
+const SEARCH_HOST_PATTERN = /(^|\.)(google\.[a-z.]+|gstatic\.com|googleusercontent\.com|googleapis\.com|duckduckgo\.com|duck\.co|startpage\.com|bing\.com)$/i;
+
+/**
+ * Clean one raw href into a usable result URL, or reject it.
+ *
+ * Google wraps links as /url?q=REAL_URL and DuckDuckGo wraps them as
+ * /l/?uddg=REAL_URL. This function unwraps both forms, drops internal
+ * search-engine links, and keeps only normal http(s) addresses.
+ *
+ * @param {string} raw - an href value from a search page
+ * @param {string} base - the search page address, for relative links
+ * @returns {string|null} a clean URL, or null if it is not a result
+ */
+function normalizeResultUrl(raw, base) {
+  let value = decodeHtmlEntities(raw).trim();
+
+  if (!value || value.startsWith('#') || /^(javascript|mailto|tel):/i.test(value)) {
+    return null;
+  }
+  if (value.startsWith('//')) value = `https:${value}`;
+
+  let url;
+  try {
+    const candidate = new URL(value, base);
+    const wrapped = candidate.searchParams.get('q')
+      || candidate.searchParams.get('uddg')
+      || candidate.searchParams.get('url');
+    const isWrapper = /^\/url\/?$/i.test(candidate.pathname)
+      || /^\/l\/?$/i.test(candidate.pathname)
+      || (SEARCH_HOST_PATTERN.test(candidate.hostname) && Boolean(wrapped));
+
+    url = isWrapper && wrapped ? new URL(wrapped, base) : candidate;
+  } catch {
+    return null;
+  }
+
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  if (SEARCH_HOST_PATTERN.test(url.hostname.toLowerCase())) return null;
+
+  url.hash = '';
+  return url.toString();
+}
+
+/**
+ * Remove duplicate URLs while keeping the order they appeared in.
+ *
+ * @param {string[]} urls - URLs in the order they were found
+ * @returns {string[]} the same URLs, each appearing once
+ */
+function uniqueUrls(urls) {
+  return [...new Set(urls)];
+}
+
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls };
