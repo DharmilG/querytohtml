@@ -177,4 +177,24 @@ function uniqueUrls(urls) {
   return [...new Set(urls)];
 }
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls };
+const GOOGLE_SEARCH_BASE = 'https://www.google.com/search';
+
+/**
+ * Pull the result links out of a Google results page.
+ *
+ * Google mixes real results with links to its own settings, images, and
+ * next page of results. normalizeResultUrl() removes the internal ones,
+ * so what is left should be the pages the user actually searched for.
+ *
+ * @param {string} html - the raw HTML of a Google results page
+ * @returns {string[]} result URLs in the order Google listed them
+ */
+function parseGoogleResults(html) {
+  return uniqueUrls(
+    extractHrefs(html)
+      .map((href) => normalizeResultUrl(href, GOOGLE_SEARCH_BASE))
+      .filter(Boolean)
+  );
+}
+
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults };
