@@ -217,4 +217,123 @@ function parseDuckDuckGoResults(html) {
   );
 }
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults };
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
+/**
+ * Recognise a page that is a bot check rather than a list of results.
+ *
+ * Both search engines sometimes answer with a challenge page instead of
+ * results. Treating that as "no results" is safer than saving the challenge
+ * as if it were a search result, and it lets the caller try the fallback.
+ *
+ * @param {string} html - search page body
+ * @returns {boolean} true if the page looks like a block
+ */
+function looksBlocked(html) {
+  return !html || /unusual traffic|detected unusual|captcha|\/sorry\/|anomaly|bot check|enable javascript and cookies/i.test(html);
+}
+
+/**
+ * Fetch one page of search results.
+ *
+ * @param {string} url - address of the results page
+ * @param {number} timeoutMs - how long to wait before giving up
+ * @returns {Promise<string|null>} the page HTML, or null on failure
+ */
+async function fetchSearchPage(url, timeoutMs) {
+  try {
+    const response = await fetch(url, {
+      headers: BROWSER_HEADERS,
+      signal: AbortSignal.timeout(timeoutMs),
+      redirect: 'follow',
+    });
+    return response.ok ? await response.text() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read enough result pages from one provider to reach the wanted count.
+ *
+ * Search engines show ten links per page, so this asks for page two only
+ * when page one did not provide enough. Five pages is a hard ceiling: a
+ * run should not keep hitting a search engine forever.
+ *
+ * @param {'google'|'duckduckgo'} provider - which engine to ask
+ * @param {string} query - the search query
+ * @param {number} count - how many URLs to collect
+ * @param {number} timeoutMs - per-request timeout
+ * @returns {Promise<string[]>} result URLs, up to count
+ */
+async function collectResults(provider, query, count, timeoutMs) {
+  const urls = [];
+
+  for (let page = 0; page < 5 && urls.length < count; page += 1) {
+    const start = page * 10;
+    const url = provider === 'google'
+      ? `https://www.google.com/search?q=${encodeURIComponent(query)}&num=10&start=${start}&hl=en`
+      : `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}&s=${start}`;
+
+    const html = await fetchSearchPage(url, timeoutMs);
+    if (looksBlocked(html)) break;
+
+    const found = provider === 'google'
+      ? parseGoogleResults(html)
+      : parseDuckDuckGoResults(html);
+    if (found.length === 0) break;
+
+    urls.push(...found);
+  }
+
+  return uniqueUrls(urls).slice(0, count);
+}
+
+/**
+ * Get result URLs for a query, trying Google and then DuckDuckGo.
+ *
+ * The source setting controls the order: "auto" tries both, while a named
+ * provider is used alone. The returned object always says which provider
+ * supplied the links, whether the run was blocked, and whether the full
+ * count was reached, so the interface can tell the truth about the result.
+ *
+ * @param {string} query - the search query
+ * @param {number} count - how many URLs are wanted
+ * @param {'auto'|'google'|'duckduckgo'} source - provider choice
+ * @param {number} timeoutMs - per-request timeout
+ * @returns {Promise<{urls: string[], source: string, blocked: boolean, complete: boolean, notes: string[]}>}
+ */
+async function searchWeb(query, count = 10, source = 'auto', timeoutMs = 15000) {
+  const providers = source === 'duckduckgo' || source === 'google'
+    ? [source]
+    : ['google', 'duckduckgo'];
+  const notes = [];
+
+  for (const provider of providers) {
+    const urls = await collectResults(provider, query, count, timeoutMs);
+    if (urls.length > 0) {
+      return {
+        urls,
+        source: provider,
+        blocked: false,
+        complete: urls.length >= count,
+        notes,
+      };
+    }
+    notes.push(`${provider} returned no usable results`);
+  }
+
+  return {
+    urls: [],
+    source: providers[providers.length - 1],
+    blocked: true,
+    complete: false,
+    notes,
+  };
+}
+
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb };
