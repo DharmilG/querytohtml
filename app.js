@@ -197,4 +197,24 @@ function parseGoogleResults(html) {
   );
 }
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults };
+const DUCKDUCKGO_SEARCH_BASE = 'https://html.duckduckgo.com/html/';
+
+/**
+ * Pull the result links out of a DuckDuckGo HTML results page.
+ *
+ * DuckDuckGo sends result addresses through a /l/?uddg= redirect, which
+ * normalizeResultUrl() already knows how to unwrap. Having a parser for
+ * this source means a Google CAPTCHA does not have to stop the run.
+ *
+ * @param {string} html - the raw HTML of a DuckDuckGo results page
+ * @returns {string[]} result URLs in the order DuckDuckGo listed them
+ */
+function parseDuckDuckGoResults(html) {
+  return uniqueUrls(
+    extractHrefs(html)
+      .map((href) => normalizeResultUrl(href, DUCKDUCKGO_SEARCH_BASE))
+      .filter(Boolean)
+  );
+}
+
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults };
