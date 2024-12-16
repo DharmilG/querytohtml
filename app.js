@@ -336,4 +336,84 @@ async function searchWeb(query, count = 10, source = 'auto', timeoutMs = 15000) 
   };
 }
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb };
+const MAX_PAGE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Read a response body, but never keep more than maxBytes.
+ *
+ * A page can be enormous. Reading it all into memory would let one strange
+ * site use up the whole process, so this reader stops at the cap and
+ * reports that the saved file is only the first part.
+ *
+ * @param {ReadableStream<Uint8Array>} body - the response stream
+ * @param {number} maxBytes - byte limit
+ * @returns {Promise<{text: string, truncated: boolean}>}
+ */
+async function readLimitedBody(body, maxBytes) {
+  if (!body) return { text: '', truncated: false };
+
+  const reader = body.getReader();
+  const chunks = [];
+  let total = 0;
+  let truncated = false;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      total += value.byteLength;
+      if (total > maxBytes) {
+        truncated = true;
+        break;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    try {
+      if (truncated) await reader.cancel();
+    } catch { /* the stream may already be closed */ }
+    try { reader.releaseLock(); } catch { /* already released */ }
+  }
+
+  const bytes = Buffer.concat(chunks);
+  let text = bytes.toString('utf8');
+  return { text, truncated };
+}
+
+/**
+ * Download one web page as text.
+ *
+ * Failures are returned, not thrown: one dead link should not stop the
+ * other nine pages from being saved. The caller gets an ok flag and a
+ * short reason it can show in the results list.
+ *
+ * @param {string} url - page address to download
+ * @param {number} timeoutMs - how long to wait before giving up
+ * @returns {Promise<{ok: boolean, html: string, error: string, status: number|null, truncated: boolean}>}
+ */
+async function fetchPage(url, timeoutMs = 15000) {
+  const failed = (error, status = null) => ({ ok: false, html: '', error, status, truncated: false });
+
+  try {
+    const response = await fetch(url, {
+      headers: BROWSER_HEADERS,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (!response.ok) return failed(`HTTP ${response.status}`, response.status);
+
+    const contentType = response.headers.get('content-type') || '';
+    if (/^(image|audio|video)\/|application\/(pdf|octet-stream|zip|json)/i.test(contentType)) {
+      return failed(`Not an HTML page (${contentType.split(';')[0]})`, response.status);
+    }
+
+    const { text, truncated } = await readLimitedBody(response.body, MAX_PAGE_BYTES);
+    return { ok: true, html: text, error: '', status: response.status, truncated };
+  } catch (error) {
+    return failed(error?.name === 'TimeoutError' ? 'Timed out' : String(error?.message || error));
+  }
+}
+
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage };
