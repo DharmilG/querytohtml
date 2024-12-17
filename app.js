@@ -416,4 +416,32 @@ async function fetchPage(url, timeoutMs = 15000) {
   }
 }
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage };
+/**
+ * Add a base tag pointing at the page's original address.
+ *
+ * Saved pages contain relative links and images like /logo.png. Without
+ * a base tag, a browser opened from disk looks for that file on the local
+ * drive and finds nothing. The base tag tells it to resolve those paths
+ * against the original website instead.
+ *
+ * @param {string} html - raw HTML of a saved page
+ * @param {string} url - the address the HTML came from
+ * @returns {string} the HTML with one base tag
+ */
+function injectBaseTag(html, url) {
+  const source = String(html ?? '');
+  const safeUrl = String(url ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;');
+  const tag = `<base href="${safeUrl}">`;
+
+  if (/<base\b/i.test(source)) {
+    return source.replace(/<base\b[^>]*>/gi, tag);
+  }
+  if (/<head\b[^>]*>/i.test(source)) {
+    return source.replace(/(<head\b[^>]*>)/i, `$1\n  ${tag}`);
+  }
+  return `${tag}\n${source}`;
+}
+
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag };
