@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('node:path');
+const fs = require('node:fs/promises');
 
 // app.js — Query to HTML
 //
@@ -444,4 +445,48 @@ function injectBaseTag(html, url) {
   return `${tag}\n${source}`;
 }
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag };
+/**
+ * Escape text before putting it into HTML.
+ *
+ * Page addresses and error messages come from the internet. Writing them
+ * straight into a stub file could inject markup, so this function makes
+ * them plain text first.
+ *
+ * @param {string} text - text to make safe for HTML
+ * @returns {string} escaped text
+ */
+function escapeHtml(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Build a small readable HTML file when a page could not be downloaded.
+ *
+ * A run always produces ten files. When one address is dead, this stub
+ * keeps the count honest and explains what went wrong instead of leaving
+ * an empty file that looks like a bug.
+ *
+ * @param {string} url - the address that failed
+ * @param {string} error - short reason for the failure
+ * @returns {string} a complete HTML document
+ */
+function errorStub(url, error) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Could not save page</title></head>
+<body>
+  <h1>Could not save this page</h1>
+  <p>The search found this address, but the page could not be downloaded.</p>
+  <p><strong>Address:</strong> ${escapeHtml(url)}</p>
+  <p><strong>Reason:</strong> ${escapeHtml(error || 'Unknown error')}</p>
+</body>
+</html>
+`;
+}
+
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub };
