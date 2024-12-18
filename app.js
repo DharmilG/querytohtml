@@ -489,4 +489,106 @@ function errorStub(url, error) {
 `;
 }
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub };
+/**
+ * Choose a file name for one saved page, avoiding clashes.
+ *
+ * The name starts with the result number, then the website's host, so the
+ * files sort in the same order as the search results. If two results come
+ * from the same host, a number is added to the second name.
+ *
+ * @param {string} url - the page address
+ * @param {number} index - zero-based position in the results
+ * @param {Set<string>} used - names already taken in this run
+ * @returns {string} a file name ending in .html
+ */
+function pageFileName(url, index, used) {
+  let host = 'page';
+  try {
+    host = new URL(url).hostname.replace(/^www\./i, '');
+  } catch { /* keep the fallback name */ }
+
+  const base = `${String(index + 1).padStart(2, '0')}-${slugify(host)}.html`;
+  let name = base;
+  let suffix = 2;
+  while (used.has(name)) {
+    name = base.replace(/\.html$/, `-${suffix}.html`);
+    suffix += 1;
+  }
+  used.add(name);
+  return name;
+}
+
+/**
+ * Save a whole run into a fresh folder under the chosen base folder.
+ *
+ * This function owns the file system work: make the base folder, make a
+ * run folder that cannot collide with an earlier one, write every page,
+ * and write the manifest. It never assumes a page downloaded correctly;
+ * the caller passes the fetch result for each one.
+ *
+ * @param {string} baseFolder - folder the user chose
+ * @param {string} query - the search query
+ * @param {Array<{url: string, ok: boolean, html: string, error: string}>} pages - fetched pages
+ * @param {object} options - time, base tag, manifest, source, notes, complete
+ * @returns {Promise<{folder: string, name: string, files: Array<object>, manifest: object|null}>}
+ */
+async function writeRunFiles(baseFolder, query, pages, options = {}) {
+  const {
+    now = new Date(),
+    addBaseTag = true,
+    saveManifest = true,
+    source = 'unknown',
+    notes = [],
+    complete = false,
+  } = options;
+
+  await fs.mkdir(path.resolve(baseFolder), { recursive: true });
+
+  const name = runFolderName(query, now);
+  let folder = resolveInside(baseFolder, name);
+
+  // Two runs started in the same second must not overwrite each other.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.mkdir(folder);
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      folder = resolveInside(baseFolder, `${name}-${attempt + 1}`);
+    }
+  }
+
+  const used = new Set();
+  const files = [];
+
+  for (let index = 0; index < pages.length; index += 1) {
+    const page = pages[index];
+    const fileName = pageFileName(page.url, index, used);
+    const content = page.ok
+      ? (addBaseTag ? injectBaseTag(page.html, page.url) : page.html)
+      : errorStub(page.url, page.error);
+
+    await fs.writeFile(resolveInside(folder, fileName), content, 'utf8');
+    files.push({
+      name: fileName,
+      url: page.url,
+      ok: Boolean(page.ok),
+      error: page.error || '',
+      bytes: Buffer.byteLength(content, 'utf8'),
+    });
+  }
+
+  let manifest = null;
+  if (saveManifest) {
+    manifest = { query, createdAt: now.toISOString(), source, complete, notes, files };
+    await fs.writeFile(
+      resolveInside(folder, 'manifest.json'),
+      JSON.stringify(manifest, null, 2),
+      'utf8'
+    );
+  }
+
+  return { folder, name: path.basename(folder), files, manifest };
+}
+
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles };
