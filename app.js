@@ -591,4 +591,133 @@ async function writeRunFiles(baseFolder, query, pages, options = {}) {
   return { folder, name: path.basename(folder), files, manifest };
 }
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles };
+/**
+ * Compute the CRC-32 checksum used by the ZIP format.
+ *
+ * A ZIP stores a checksum for every file so a reader can tell whether the
+ * file arrived intact. This is the standard ZIP polynomial, calculated a
+ * byte at a time. It is slow for huge files but our pages are capped at
+ * 5 MB each, which is fine.
+ *
+ * @param {Buffer} buffer - bytes to checksum
+ * @returns {number} unsigned 32-bit checksum
+ */
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc & 1) ? ((crc >>> 1) ^ 0xedb88320) : (crc >>> 1);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/**
+ * Convert a JavaScript date into the two small numbers ZIP expects.
+ *
+ * ZIP stores time and date in a packed 16-bit format with 1980 as the
+ * starting year. Dates outside 1980-2107 are clamped so the writer never
+ * produces a negative number.
+ *
+ * @param {Date} date - modification time
+ * @returns {{time: number, date: number}} packed ZIP values
+ */
+function dosDateTime(date) {
+  const year = Math.min(2107, Math.max(1980, date.getFullYear()));
+  const time = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+  const packedDate = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+  return { time, date: packedDate };
+}
+
+/**
+ * Build a ZIP archive in memory from a list of named files.
+ *
+ * This writes the ZIP "store" format: each file is copied without
+ * compression. That would waste space on huge files, but HTML compresses
+ * well only with extra libraries, and a stored ZIP keeps this app free of
+ * dependencies. Windows, macOS, and Linux all open it without trouble.
+ *
+ * @param {Array<{name: string, data: Buffer|string}>} entries - files to add
+ * @param {Date} now - modification time for the entries
+ * @returns {Buffer} the finished ZIP file
+ */
+function buildZip(entries, now = new Date()) {
+  const write16 = (buffer, offset, value) => {
+    buffer.writeUInt16LE(value, offset);
+    return offset + 2;
+  };
+  const write32 = (buffer, offset, value) => {
+    buffer.writeUInt32LE(value, offset);
+    return offset + 4;
+  };
+
+  const parts = [];
+  const directory = [];
+  let offset = 0;
+  const { time, date } = dosDateTime(now);
+
+  for (const entry of entries) {
+    const nameBytes = Buffer.from(entry.name, 'utf8');
+    const data = Buffer.isBuffer(entry.data)
+      ? entry.data
+      : Buffer.from(String(entry.data ?? ''), 'utf8');
+    const checksum = crc32(data);
+
+    const local = Buffer.alloc(30 + nameBytes.length);
+    let p = 0;
+    p = write32(local, p, 0x04034b50);
+    p = write16(local, p, 20);
+    p = write16(local, p, 0x0800);
+    p = write16(local, p, 0);
+    p = write16(local, p, time);
+    p = write16(local, p, date);
+    p = write32(local, p, checksum);
+    p = write32(local, p, data.length);
+    p = write32(local, p, data.length);
+    p = write16(local, p, nameBytes.length);
+    p = write16(local, p, 0);
+    nameBytes.copy(local, p);
+    parts.push(local, data);
+
+    const central = Buffer.alloc(46 + nameBytes.length);
+    let c = 0;
+    c = write32(central, c, 0x02014b50);
+    c = write16(central, c, 20);
+    c = write16(central, c, 20);
+    c = write16(central, c, 0x0800);
+    c = write16(central, c, 0);
+    c = write16(central, c, time);
+    c = write16(central, c, date);
+    c = write32(central, c, checksum);
+    c = write32(central, c, data.length);
+    c = write32(central, c, data.length);
+    c = write16(central, c, nameBytes.length);
+    c = write16(central, c, 0);
+    c = write16(central, c, 0);
+    c = write16(central, c, 0);
+    c = write16(central, c, 0);
+    c = write32(central, c, 0);
+    c = write32(central, c, offset);
+    nameBytes.copy(central, c);
+    directory.push(central);
+
+    offset += local.length + data.length;
+  }
+
+  const directorySize = directory.reduce((total, buffer) => total + buffer.length, 0);
+  const end = Buffer.alloc(22);
+  let e = 0;
+  e = write32(end, e, 0x06054b50);
+  e = write16(end, e, 0);
+  e = write16(end, e, 0);
+  e = write16(end, e, entries.length);
+  e = write16(end, e, entries.length);
+  e = write32(end, e, directorySize);
+  e = write32(end, e, offset);
+  write16(end, e, 0);
+
+  return Buffer.concat([...parts, ...directory, end]);
+}
+
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles, crc32, dosDateTime, buildZip };
