@@ -720,4 +720,372 @@ function buildZip(entries, now = new Date()) {
   return Buffer.concat([...parts, ...directory, end]);
 }
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles, crc32, dosDateTime, buildZip };
+const PAGE = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Query to HTML</title>
+<style>
+*{box-sizing:border-box}
+:root{--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--accent:#4f46e5;--accent-dark:#4338ca;--good:#15803d;--bad:#b91c1c;--bg:#f1f5f9}
+body{margin:0;min-height:100vh;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:radial-gradient(circle at 12% -10%,#dbeafe 0,transparent 42%),radial-gradient(circle at 100% 0,#ede9fe 0,transparent 40%),linear-gradient(160deg,#f8fafc,#f1f5f9)}
+.shell{width:min(100% - 32px,980px);margin:0 auto;padding:28px 0 60px}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--ink);color:#fff;padding:16px 22px;border-radius:18px;box-shadow:0 18px 40px -24px rgba(15,23,42,.8)}
+.brand{display:flex;align-items:center;gap:12px}
+.logo{display:grid;place-items:center;width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,#6366f1,#8b5cf6);font-weight:800;font-size:18px}
+.brand strong{display:block;font-size:16px;letter-spacing:.2px}
+.brand small{display:block;color:#94a3b8;font-size:12px;margin-top:2px}
+nav{display:flex;gap:6px;background:rgba(255,255,255,.08);padding:4px;border-radius:12px}
+.nav{border:0;background:transparent;color:#cbd5e1;padding:8px 16px;border-radius:9px;font:inherit;font-size:14px;cursor:pointer;transition:.18s}
+.nav:hover{color:#fff;background:rgba(255,255,255,.08)}
+.nav.active{background:#fff;color:var(--ink);font-weight:600}
+.screen{display:none}
+.screen.active{display:block;animation:fade .25s ease}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.hero{margin:34px 4px 22px}
+.hero h1{font-size:clamp(26px,4vw,38px);line-height:1.15;margin:0 0 10px;letter-spacing:-.8px}
+.hero p{margin:0;color:var(--muted);font-size:15px;max-width:620px;line-height:1.6}
+.card{background:#fff;border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:0 12px 34px -24px rgba(15,23,42,.35);margin-bottom:18px}
+.card h2{margin:0 0 4px;font-size:18px}
+.card .sub{margin:0 0 20px;color:var(--muted);font-size:13px;line-height:1.5}
+.field{display:block;margin-bottom:18px}
+.field>span{display:block;font-size:13px;font-weight:600;margin-bottom:8px}
+.field small{display:block;color:var(--muted);font-size:12px;margin-top:6px;line-height:1.5}
+input,textarea,select{width:100%;border:1px solid var(--line);border-radius:11px;padding:12px 14px;font:inherit;font-size:14px;color:var(--ink);background:#fff;outline:none;transition:.18s}
+textarea{resize:vertical;min-height:86px;line-height:1.55}
+input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 4px rgba(79,70,229,.12)}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.primary{width:100%;border:0;border-radius:12px;background:linear-gradient(135deg,var(--accent),#6d28d9);color:#fff;padding:14px 20px;font:inherit;font-weight:700;font-size:15px;cursor:pointer;box-shadow:0 12px 24px -14px rgba(79,70,229,.9);transition:.18s}
+.primary:hover:not(:disabled){filter:brightness(1.07);transform:translateY(-1px)}
+.primary:disabled{opacity:.6;cursor:wait}
+.secondary{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:11px;padding:11px 18px;font:inherit;font-weight:600;font-size:14px;cursor:pointer;transition:.18s}
+.secondary:hover{border-color:var(--accent);color:var(--accent)}
+.hidden{display:none!important}
+.progress-top{display:flex;justify-content:space-between;gap:12px;font-size:13px;margin-bottom:10px}
+.progress-top strong{color:var(--accent)}
+.track{height:9px;background:#eef2ff;border-radius:99px;overflow:hidden}
+.fill{height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,#6366f1,#a855f7);transition:width .35s ease}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}
+.pill{background:#f1f5f9;border:1px solid var(--line);border-radius:99px;padding:6px 12px;font-size:12px;color:var(--muted)}
+.pill b{color:var(--ink);font-weight:600}
+.files{list-style:none;margin:0 0 20px;padding:0;border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.files li{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line);font-size:14px}
+.files li:last-child{border-bottom:0}
+.files li:hover{background:#f8fafc}
+.num{width:28px;height:28px;flex:none;display:grid;place-items:center;border-radius:9px;background:#eef2ff;color:var(--accent);font-size:12px;font-weight:700}
+.file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-name a{color:var(--ink);text-decoration:none}
+.file-name a:hover{color:var(--accent);text-decoration:underline}
+.badge{flex:none;font-size:11px;font-weight:700;padding:4px 9px;border-radius:99px}
+.badge.ok{background:#dcfce7;color:var(--good)}
+.badge.bad{background:#fee2e2;color:var(--bad)}
+.size{flex:none;color:var(--muted);font-size:12px;width:64px;text-align:right}
+.actions{display:flex;gap:10px;flex-wrap:wrap}
+.note{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:11px;padding:11px 14px;font-size:13px;margin-bottom:16px;line-height:1.5}
+.group{border-top:1px solid var(--line);padding-top:18px;margin-top:6px}
+.group:first-child{border-top:0;padding-top:0;margin-top:0}
+.group h3{margin:0 0 16px;font-size:14px;color:var(--accent);text-transform:uppercase;letter-spacing:.7px}
+.switch{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:11px 0;border-bottom:1px solid #f1f5f9}
+.switch:last-child{border-bottom:0}
+.switch span{font-size:14px}
+.switch small{display:block;color:var(--muted);font-size:12px;margin-top:3px}
+.toggle{position:relative;width:44px;height:25px;flex:none}
+.toggle input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.slider{position:absolute;inset:0;background:#cbd5e1;border-radius:99px;transition:.2s}
+.slider:before{content:"";position:absolute;left:3px;top:3px;width:19px;height:19px;background:#fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:.2s}
+.toggle input:checked+.slider{background:var(--accent)}
+.toggle input:checked+.slider:before{transform:translateX(19px)}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 18px;border-radius:11px;font-size:14px;box-shadow:0 16px 30px -12px rgba(0,0,0,.5);z-index:10;max-width:min(90vw,520px)}
+.toast.bad{background:var(--bad)}
+@media(max-width:640px){.grid,.grid-2{grid-template-columns:1fr}.topbar{flex-direction:column;align-items:flex-start}.shell{width:min(100% - 20px,980px);padding-top:14px}.card{padding:18px}.size{display:none}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand"><span class="logo">Q</span><div><strong>Query to HTML</strong><small>Search once. Keep ten pages.</small></div></div>
+    <nav><button id="nav-search" class="nav active" type="button">Search</button><button id="nav-settings" class="nav" type="button">Settings</button></nav>
+  </header>
+
+  <main>
+    <section id="screen-search" class="screen active">
+      <div class="hero"><h1>Turn a query into ten saved pages.</h1><p>The app searches the web, downloads the first ten pages, and gives each one its own HTML file in a new folder. Download the whole run as a ZIP when you are done.</p></div>
+
+      <form id="run-form" class="card">
+        <label class="field"><span>Search query</span><textarea id="query" rows="3" placeholder="For example: nodejs stream guide" required></textarea></label>
+        <div class="grid">
+          <label class="field"><span>Results</span><input id="count" type="number" min="1" max="50" value="10"></label>
+          <label class="field"><span>Search source</span><select id="source"><option value="auto">Google, then DuckDuckGo</option><option value="google">Google only</option><option value="duckduckgo">DuckDuckGo only</option></select></label>
+          <label class="field"><span>Timeout (seconds)</span><input id="timeout" type="number" min="1" max="120" value="15"></label>
+        </div>
+        <label class="field" id="folder-field"><span>Save location</span><input id="folder" type="text" placeholder="Folder on this computer"><small>Choose where this run will be saved. Turn this question off in Settings to reuse the last folder.</small></label>
+        <button id="run" class="primary" type="submit">Run search</button>
+      </form>
+
+      <section id="progress" class="card hidden">
+        <div class="progress-top"><strong id="progress-text">Starting…</strong><span id="progress-count"></span></div>
+        <div class="track"><div id="progress-fill" class="fill"></div></div>
+      </section>
+
+      <section id="results" class="card hidden">
+        <h2>Your pages are saved</h2>
+        <p class="sub" id="results-sub"></p>
+        <div class="note hidden" id="results-note"></div>
+        <div class="meta" id="results-meta"></div>
+        <ul class="files" id="file-list"></ul>
+        <div class="actions"><button id="zip" class="primary" type="button" style="width:auto">Download ZIP</button><button id="again" class="secondary" type="button">New search</button></div>
+      </section>
+    </section>
+
+    <section id="screen-settings" class="screen">
+      <div class="hero"><h1>Settings</h1><p>These choices stay in this browser. They are used on every run until you change them again.</p></div>
+      <form id="settings-form" class="card">
+        <div class="group"><h3>Folders</h3>
+          <label class="field"><span>Base folder</span><input id="s-base" type="text"><small>New run folders are created inside this folder.</small></label>
+          <label class="switch"><span>Ask location each run<small>Show the Save location box before every run.</small></span><span class="toggle"><input id="s-ask" type="checkbox"><span class="slider"></span></span></label>
+          <label class="switch"><span>Auto-use last folder<small>Skip the question and reuse the folder from the last run.</small></span><span class="toggle"><input id="s-auto" type="checkbox"><span class="slider"></span></span></label>
+        </div>
+        <div class="group"><h3>Search</h3>
+          <div class="grid-2">
+            <label class="field"><span>Results per run</span><input id="s-count" type="number" min="1" max="50"></label>
+            <label class="field"><span>Search source</span><select id="s-source"><option value="auto">Google, then DuckDuckGo</option><option value="google">Google only</option><option value="duckduckgo">DuckDuckGo only</option></select></label>
+          </div>
+          <label class="field"><span>Timeout in seconds</span><input id="s-timeout" type="number" min="1" max="120"></label>
+        </div>
+        <div class="group"><h3>Saving</h3>
+          <label class="switch"><span>Save manifest.json<small>Write a small report with the query, source, and file status.</small></span><span class="toggle"><input id="s-manifest" type="checkbox"><span class="slider"></span></span></label>
+          <label class="switch"><span>Add base tag<small>Keep relative links and images working when pages are opened from disk.</small></span><span class="toggle"><input id="s-base-tag" type="checkbox"><span class="slider"></span></span></label>
+        </div>
+        <div class="actions" style="margin-top:22px"><button class="primary" type="submit" style="width:auto">Save settings</button><button id="reset" class="secondary" type="button">Reset</button></div>
+      </form>
+    </section>
+  </main>
+</div>
+<div id="toast" class="toast hidden"></div>
+
+<script>
+(function(){
+  'use strict';
+  var KEY = 'q2h.settings';
+  var defaults = {baseFolder:'', askEachRun:true, autoFolder:false, count:10, source:'auto', timeout:15, saveManifest:true, addBaseTag:true, lastFolder:''};
+  var settings;
+  try { settings = Object.assign({}, defaults, JSON.parse(localStorage.getItem(KEY) || '{}')); }
+  catch (error) { settings = Object.assign({}, defaults); }
+
+  var byId = function(id){ return document.getElementById(id); };
+  var jobId = null;
+  var timer = null;
+  var lastRun = null;
+  var toastTimer = null;
+
+  function notify(message, bad){
+    var box = byId('toast');
+    box.textContent = message;
+    box.className = 'toast' + (bad ? ' bad' : '');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ box.className = 'toast hidden'; }, 5000);
+  }
+
+  function showScreen(name){
+    byId('screen-search').className = 'screen' + (name === 'search' ? ' active' : '');
+    byId('screen-settings').className = 'screen' + (name === 'settings' ? ' active' : '');
+    byId('nav-search').className = 'nav' + (name === 'search' ? ' active' : '');
+    byId('nav-settings').className = 'nav' + (name === 'settings' ? ' active' : '');
+  }
+
+  function saveSettings(){ localStorage.setItem(KEY, JSON.stringify(settings)); }
+
+  function renderSettings(){
+    byId('s-base').value = settings.baseFolder || '';
+    byId('s-ask').checked = !!settings.askEachRun;
+    byId('s-auto').checked = !!settings.autoFolder;
+    byId('s-count').value = settings.count;
+    byId('s-source').value = settings.source;
+    byId('s-timeout').value = settings.timeout;
+    byId('s-manifest').checked = !!settings.saveManifest;
+    byId('s-base-tag').checked = !!settings.addBaseTag;
+  }
+
+  function syncFolderField(){
+    var hidden = !!settings.autoFolder;
+    byId('folder-field').classList.toggle('hidden', hidden);
+    byId('folder').value = settings.lastFolder || settings.baseFolder || '';
+    byId('count').value = settings.count;
+    byId('source').value = settings.source;
+    byId('timeout').value = settings.timeout;
+  }
+
+  function folderForRun(){
+    return settings.autoFolder ? (settings.lastFolder || settings.baseFolder || '') : byId('folder').value.trim();
+  }
+
+  function formatBytes(bytes){
+    if (bytes < 1024) return bytes + ' B';
+    return (bytes / 1024).toFixed(1) + ' KB';
+  }
+
+  function renderResults(result){
+    lastRun = result;
+    byId('results').classList.remove('hidden');
+    byId('results-sub').textContent = 'Saved ' + result.files.length + ' files in a new folder.';
+    byId('results-meta').innerHTML = '';
+    var meta = [['Source', result.source], ['Query', result.query], ['Folder', result.name]];
+    meta.forEach(function(item){
+      var pill = document.createElement('span');
+      pill.className = 'pill';
+      var label = document.createElement('span');
+      label.textContent = item[0] + ': ';
+      var value = document.createElement('b');
+      value.textContent = item[1];
+      pill.appendChild(label);
+      pill.appendChild(value);
+      byId('results-meta').appendChild(pill);
+    });
+
+    var note = byId('results-note');
+    var messages = (result.notes || []).slice();
+    if (!result.complete) messages.push('Fewer than the requested number of pages were found.');
+    if (messages.length) {
+      note.textContent = messages.join(' ');
+      note.classList.remove('hidden');
+    } else {
+      note.classList.add('hidden');
+    }
+
+    var list = byId('file-list');
+    list.innerHTML = '';
+    result.files.forEach(function(file, index){
+      var row = document.createElement('li');
+      var number = document.createElement('span');
+      number.className = 'num';
+      number.textContent = String(index + 1).padStart(2, '0');
+      var name = document.createElement('span');
+      name.className = 'file-name';
+      var link = document.createElement('a');
+      link.textContent = file.name;
+      link.href = '/view/' + encodeURIComponent(result.name) + '/' + encodeURIComponent(file.name);
+      link.target = '_blank';
+      link.rel = 'noopener';
+      name.appendChild(link);
+      var badge = document.createElement('span');
+      badge.className = 'badge ' + (file.ok ? 'ok' : 'bad');
+      badge.textContent = file.ok ? 'Saved' : 'Error';
+      var size = document.createElement('span');
+      size.className = 'size';
+      size.textContent = formatBytes(file.bytes);
+      row.appendChild(number);
+      row.appendChild(name);
+      row.appendChild(badge);
+      row.appendChild(size);
+      list.appendChild(row);
+    });
+  }
+
+  function startRun(){
+    var query = byId('query').value.trim();
+    var folder = folderForRun();
+    if (!query) { notify('Enter a query first.', true); return; }
+    if (!folder) { notify('Choose a save location first.', true); return; }
+
+    var payload = {
+      query: query,
+      folder: folder,
+      count: Number(byId('count').value) || 10,
+      source: byId('source').value,
+      timeout: Number(byId('timeout').value) || 15,
+      saveManifest: !!settings.saveManifest,
+      addBaseTag: !!settings.addBaseTag
+    };
+
+    byId('run').disabled = true;
+    byId('results').classList.add('hidden');
+    byId('progress').classList.remove('hidden');
+    byId('progress-text').textContent = 'Starting…';
+    byId('progress-fill').style.width = '4%';
+    byId('progress-count').textContent = '';
+
+    fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
+      .then(function(response){ return response.json().then(function(data){ return {ok:response.ok, data:data}; }); })
+      .then(function(out){
+        if (!out.ok || !out.data.jobId) throw new Error(out.data.error || 'Could not start the run.');
+        jobId = out.data.jobId;
+        timer = setInterval(poll, 400);
+        poll();
+      })
+      .catch(function(error){ fail(error.message); });
+  }
+
+  function poll(){
+    if (!jobId) return;
+    fetch('/api/status?id=' + encodeURIComponent(jobId))
+      .then(function(response){ return response.json(); })
+      .then(function(status){
+        if (status.state === 'running') {
+          byId('progress-text').textContent = status.message || 'Working…';
+          var total = status.total || 1;
+          var percent = Math.max(4, Math.min(100, Math.round(((status.done || 0) / (total + 1)) * 100)));
+          byId('progress-fill').style.width = percent + '%';
+          byId('progress-count').textContent = (status.done || 0) + ' / ' + total;
+          return;
+        }
+        clearInterval(timer);
+        timer = null;
+        byId('progress').classList.add('hidden');
+        byId('run').disabled = false;
+        if (status.state === 'error') { notify(status.error || 'The run failed.', true); return; }
+        settings.lastFolder = status.result.folderPath || folderForRun();
+        saveSettings();
+        renderResults(status.result);
+        notify('Done. ' + status.result.files.length + ' files saved.');
+      })
+      .catch(function(error){ fail(error.message); });
+  }
+
+  function fail(message){
+    clearInterval(timer);
+    timer = null;
+    byId('run').disabled = false;
+    byId('progress').classList.add('hidden');
+    notify(message, true);
+  }
+
+  byId('nav-search').addEventListener('click', function(){ showScreen('search'); });
+  byId('nav-settings').addEventListener('click', function(){ renderSettings(); showScreen('settings'); });
+  byId('run-form').addEventListener('submit', function(event){ event.preventDefault(); startRun(); });
+  byId('again').addEventListener('click', function(){ byId('results').classList.add('hidden'); byId('query').focus(); });
+  byId('zip').addEventListener('click', function(){
+    if (!lastRun) return;
+    window.location.href = '/api/zip?run=' + encodeURIComponent(lastRun.name);
+  });
+  byId('settings-form').addEventListener('submit', function(event){
+    event.preventDefault();
+    settings.baseFolder = byId('s-base').value.trim();
+    settings.askEachRun = byId('s-ask').checked;
+    settings.autoFolder = byId('s-auto').checked;
+    settings.count = Number(byId('s-count').value) || 10;
+    settings.source = byId('s-source').value;
+    settings.timeout = Number(byId('s-timeout').value) || 15;
+    settings.saveManifest = byId('s-manifest').checked;
+    settings.addBaseTag = byId('s-base-tag').checked;
+    saveSettings();
+    syncFolderField();
+    showScreen('search');
+    notify('Settings saved.');
+  });
+  byId('reset').addEventListener('click', function(){
+    settings = Object.assign({}, defaults);
+    saveSettings();
+    renderSettings();
+    notify('Settings reset.');
+  });
+
+  renderSettings();
+  syncFolderField();
+})();
+</script>
+</body>
+</html>`;
+
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles, crc32, dosDateTime, buildZip, PAGE };
