@@ -1169,7 +1169,9 @@ async function executeRun(jobId, job, options) {
     for (let index = 0; index < search.urls.length; index += 1) {
       job.message = `Fetching page ${index + 1} of ${search.urls.length}…`;
       job.done = index;
-      pages.push(await fetchPage(search.urls[index], options.timeout));
+      const page = await fetchPage(search.urls[index], options.timeout);
+      page.url = search.urls[index];
+      pages.push(page);
       job.done = index + 1;
     }
 
@@ -1273,4 +1275,147 @@ function handleStatus(response, url) {
   });
 }
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, executeRun, handleRun, handleStatus };
+/**
+ * Build and send a ZIP of one completed run.
+ *
+ * The archive is also written into the run folder, so the user has a copy
+ * on disk as well as a download. Only saved HTML files and the manifest
+ * are included; a ZIP from an earlier download is skipped.
+ *
+ * @param {http.ServerResponse} response - the response to answer
+ * @param {URL} url - request URL containing the run name
+ * @returns {Promise<void>}
+ */
+async function handleZip(response, url) {
+  const name = url.searchParams.get('run') || '';
+  const run = runs.get(name);
+  if (!run) {
+    sendJson(response, 404, { error: 'Unknown run.' });
+    return;
+  }
+
+  try {
+    const names = (await fs.readdir(run.folder))
+      .filter((file) => /\.html$/i.test(file) || file === 'manifest.json')
+      .sort();
+    const entries = [];
+    for (const file of names) {
+      entries.push({ name: file, data: await fs.readFile(resolveInside(run.folder, file)) });
+    }
+
+    const archive = buildZip(entries, new Date());
+    await fs.writeFile(resolveInside(run.folder, `${name}.zip`), archive);
+
+    response.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${name}.zip"`,
+      'Content-Length': archive.length,
+    });
+    response.end(archive);
+  } catch (error) {
+    sendJson(response, 500, { error: String(error?.message || error) });
+  }
+}
+
+/**
+ * Serve one saved file so it can be opened in a new browser tab.
+ *
+ * The run name is looked up in the runs map, so a visitor cannot guess a
+ * path and read files from elsewhere on the machine.
+ *
+ * @param {http.ServerResponse} response - the response to answer
+ * @param {string} pathname - path of the form /view/RUN/FILE
+ * @returns {Promise<void>}
+ */
+async function handleView(response, pathname) {
+  const parts = pathname.split('/').filter(Boolean);
+  if (parts.length !== 3 || parts[0] !== 'view') {
+    sendJson(response, 404, { error: 'Unknown file.' });
+    return;
+  }
+
+  const run = runs.get(decodeURIComponent(parts[1]));
+  if (!run) {
+    sendJson(response, 404, { error: 'Unknown run.' });
+    return;
+  }
+
+  const file = decodeURIComponent(parts[2]);
+  if (!/\.html$/i.test(file) && file !== 'manifest.json') {
+    sendJson(response, 400, { error: 'Only saved HTML files can be viewed.' });
+    return;
+  }
+
+  try {
+    const data = await fs.readFile(resolveInside(run.folder, file));
+    const type = file === 'manifest.json'
+      ? 'application/json; charset=utf-8'
+      : 'text/html; charset=utf-8';
+    response.writeHead(200, { 'Content-Type': type, 'Content-Length': data.length });
+    response.end(data);
+  } catch (error) {
+    sendJson(response, 404, { error: String(error?.message || error) });
+  }
+}
+
+/**
+ * Start the HTTP server and return it.
+ *
+ * The port comes from the environment so free hosts can choose one; on a
+ * personal machine it defaults to 3000. Binding 0.0.0.0 rather than
+ * localhost is what makes the app reachable from outside a container.
+ *
+ * @returns {http.Server} the running server
+ */
+function startServer() {
+  const port = Number(process.env.PORT) || 3000;
+
+  const server = http.createServer(async (request, response) => {
+    try {
+      const url = new URL(request.url, 'http://localhost');
+
+      if (request.method === 'GET' && url.pathname === '/') {
+        const body = Buffer.from(PAGE, 'utf8');
+        response.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Length': body.length,
+        });
+        response.end(body);
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/run') {
+        await handleRun(response, await readJson(request));
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/status') {
+        handleStatus(response, url);
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/api/zip') {
+        await handleZip(response, url);
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname.startsWith('/view/')) {
+        await handleView(response, url.pathname);
+        return;
+      }
+
+      sendJson(response, 404, { error: 'Not found.' });
+    } catch (error) {
+      sendJson(response, 500, { error: String(error?.message || error) });
+    }
+  });
+
+  server.listen(port, '0.0.0.0', () => {
+    console.log(`Query to HTML is running at http://localhost:${port}`);
+  });
+  return server;
+}
+
+if (require.main === module) startServer();
+
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
