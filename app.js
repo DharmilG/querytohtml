@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const http = require('node:http');
 
 // app.js — Query to HTML
 //
@@ -1088,4 +1089,188 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 </body>
 </html>`;
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles, crc32, dosDateTime, buildZip, PAGE };
+const DEFAULT_BASE_DIR = process.env.Q2H_BASE || path.join(__dirname, 'downloads');
+const MAX_REQUEST_BYTES = 1024 * 1024;
+const jobs = new Map();
+const runs = new Map();
+let jobCounter = 0;
+
+/**
+ * Write a JSON response.
+ *
+ * @param {http.ServerResponse} response - the response to answer
+ * @param {number} status - HTTP status code
+ * @param {object} data - object to send
+ */
+function sendJson(response, status, data) {
+  const body = JSON.stringify(data);
+  response.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+  });
+  response.end(body);
+}
+
+/**
+ * Read and parse a JSON request body, with a size limit.
+ *
+ * @param {http.IncomingMessage} request - the incoming request
+ * @returns {Promise<object>} the parsed body
+ */
+async function readJson(request) {
+  const chunks = [];
+  let total = 0;
+
+  for await (const chunk of request) {
+    total += chunk.length;
+    if (total > MAX_REQUEST_BYTES) throw new Error('Request is too large');
+    chunks.push(chunk);
+  }
+
+  if (chunks.length === 0) return {};
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+/**
+ * Keep a number inside a range, so browser input cannot send silly values.
+ *
+ * @param {number} value - value to clamp
+ * @param {number} low - smallest allowed value
+ * @param {number} high - largest allowed value
+ * @returns {number} the clamped value
+ */
+function clamp(value, low, high) {
+  return Math.min(high, Math.max(low, value));
+}
+
+/**
+ * Do one run in the background and keep its progress in the job map.
+ *
+ * The browser starts a job and then asks for its status. Keeping the work
+ * here means the HTTP response is immediate, while the poll endpoint can
+ * report each step. Any failure is stored on the job instead of crashing
+ * the server.
+ *
+ * @param {string} jobId - id of this job
+ * @param {object} job - mutable job state
+ * @param {object} options - validated run options
+ * @returns {Promise<void>}
+ */
+async function executeRun(jobId, job, options) {
+  try {
+    job.message = 'Searching for results…';
+    const search = await searchWeb(options.query, options.count, options.source, options.timeout);
+    if (search.urls.length === 0) {
+      throw new Error(search.notes.join(' ') || 'No results found. Try another query or source.');
+    }
+
+    job.total = search.urls.length;
+    const pages = [];
+    for (let index = 0; index < search.urls.length; index += 1) {
+      job.message = `Fetching page ${index + 1} of ${search.urls.length}…`;
+      job.done = index;
+      pages.push(await fetchPage(search.urls[index], options.timeout));
+      job.done = index + 1;
+    }
+
+    job.message = 'Writing files…';
+    const run = await writeRunFiles(options.folder, options.query, pages, {
+      now: new Date(),
+      source: search.source,
+      notes: search.notes,
+      complete: search.complete,
+      saveManifest: options.saveManifest,
+      addBaseTag: options.addBaseTag,
+    });
+
+    runs.set(run.name, {
+      folder: run.folder,
+      base: options.folder,
+      createdAt: new Date().toISOString(),
+    });
+
+    job.result = {
+      name: run.name,
+      folderPath: run.folder,
+      query: options.query,
+      source: search.source,
+      complete: search.complete,
+      notes: search.notes,
+      files: run.files,
+    };
+    job.state = 'done';
+    job.message = 'Done.';
+  } catch (error) {
+    job.state = 'error';
+    job.error = String(error?.message || error);
+  }
+}
+
+/**
+ * Start a run and return its job id straight away.
+ *
+ * @param {http.ServerResponse} response - the response to answer
+ * @param {object} body - request body from the browser
+ * @returns {Promise<void>}
+ */
+async function handleRun(response, body) {
+  const query = typeof body.query === 'string' ? body.query.trim() : '';
+  const folder = typeof body.folder === 'string' ? body.folder.trim() : '';
+  if (!query || !folder) {
+    sendJson(response, 400, { error: 'A query and a save location are required.' });
+    return;
+  }
+
+  const source = ['auto', 'google', 'duckduckgo'].includes(body.source) ? body.source : 'auto';
+  const options = {
+    query,
+    folder: path.resolve(folder),
+    count: clamp(Number(body.count) || 10, 1, 50),
+    timeout: clamp(Number(body.timeout) || 15, 1, 120) * 1000,
+    source,
+    saveManifest: body.saveManifest !== false,
+    addBaseTag: body.addBaseTag !== false,
+  };
+
+  const jobId = `job-${jobCounter += 1}`;
+  const job = {
+    state: 'running',
+    message: 'Starting…',
+    done: 0,
+    total: options.count,
+    result: null,
+    error: '',
+  };
+  jobs.set(jobId, job);
+  sendJson(response, 200, { jobId });
+
+  executeRun(jobId, job, options).catch((error) => {
+    job.state = 'error';
+    job.error = String(error?.message || error);
+  });
+}
+
+/**
+ * Report the current state of a job.
+ *
+ * @param {http.ServerResponse} response - the response to answer
+ * @param {URL} url - request URL containing the job id
+ */
+function handleStatus(response, url) {
+  const job = jobs.get(url.searchParams.get('id') || '');
+  if (!job) {
+    sendJson(response, 404, { error: 'Unknown job.' });
+    return;
+  }
+
+  sendJson(response, 200, {
+    state: job.state,
+    message: job.message,
+    done: job.done,
+    total: job.total,
+    error: job.error,
+    result: job.result,
+  });
+}
+
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, executeRun, handleRun, handleStatus };
