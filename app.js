@@ -870,7 +870,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 (function(){
   'use strict';
   var KEY = 'q2h.settings';
-  var defaults = {baseFolder:'', askEachRun:true, autoFolder:false, count:10, source:'auto', timeout:15, saveManifest:true, addBaseTag:true, lastFolder:''};
+  var defaults = {baseFolder:__Q2H_DEFAULT_BASE__, askEachRun:true, autoFolder:false, count:10, source:'auto', timeout:15, saveManifest:true, addBaseTag:true, lastFolder:''};
   var settings;
   try { settings = Object.assign({}, defaults, JSON.parse(localStorage.getItem(KEY) || '{}')); }
   catch (error) { settings = Object.assign({}, defaults); }
@@ -1375,7 +1375,8 @@ function startServer() {
       const url = new URL(request.url, 'http://localhost');
 
       if (request.method === 'GET' && url.pathname === '/') {
-        const body = Buffer.from(PAGE, 'utf8');
+        const page = PAGE.replace('__Q2H_DEFAULT_BASE__', JSON.stringify(DEFAULT_BASE_DIR));
+        const body = Buffer.from(page, 'utf8');
         response.writeHead(200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Length': body.length,
