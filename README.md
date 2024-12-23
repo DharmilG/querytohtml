@@ -119,7 +119,7 @@ Google does not like programs that search on its behalf. If it thinks you are a 
 
 So the app tries Google first. If Google blocks the request, the app quietly switches to DuckDuckGo's simple HTML results. You still get ten pages, just from a different search engine. The screen tells you which source was used, so you are never confused about where the links came from.
 
-If you want only one source, change **Search source** in Settings. A paid search API is also supported if you later decide you need guaranteed Google results.
+If you want only one source, change **Search source** in Settings. If you later need guaranteed Google results, a paid search API could be added to the search function. The app does not use one today, which is why it stays free.
 
 ## About HTML in this project
 
