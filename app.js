@@ -768,6 +768,14 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 .primary:disabled{opacity:.6;cursor:wait}
 .secondary{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:11px;padding:11px 18px;font:inherit;font-weight:600;font-size:14px;cursor:pointer;transition:.18s}
 .secondary:hover{border-color:var(--accent);color:var(--accent)}
+.folder-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.folder-row .secondary{flex:none}
+.folder-path{flex:1;min-width:180px;background:#f8fafc;border:1px dashed var(--line);border-radius:11px;padding:11px 12px;font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.modal{position:fixed;inset:0;background:rgba(15,23,42,.6);display:grid;place-items:center;padding:20px;z-index:20}
+.modal-card{background:#fff;border-radius:18px;padding:26px;width:min(100%,520px);box-shadow:0 30px 70px -20px rgba(0,0,0,.5)}
+.modal-card h2{margin:0 0 6px;font-size:20px}
+.collision-list{max-height:180px;overflow:auto;background:#f8fafc;border:1px solid var(--line);border-radius:11px;padding:10px 14px;margin:0 0 18px;font-size:13px;color:var(--muted)}
+.collision-list li{margin:4px 0}
 .hidden{display:none!important}
 .progress-top{display:flex;justify-content:space-between;gap:12px;font-size:13px;margin-bottom:10px}
 .progress-top strong{color:var(--accent)}
@@ -817,7 +825,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 
   <main>
     <section id="screen-search" class="screen active">
-      <div class="hero"><h1>Turn a query into ten saved pages.</h1><p>The app searches the web, downloads the first ten pages, and gives each one its own HTML file in a new folder. Download the whole run as a ZIP when you are done.</p></div>
+      <div class="hero"><h1>Turn a query into ten saved pages.</h1><p>Choose a folder, pick where the files should go, and decide whether you want HTML files, a ZIP, or both. The app does the searching and saving.</p></div>
 
       <form id="run-form" class="card">
         <label class="field"><span>Search query</span><textarea id="query" rows="3" placeholder="For example: nodejs stream guide" required></textarea></label>
@@ -826,7 +834,15 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
           <label class="field"><span>Search source</span><select id="source"><option value="auto">Google, then DuckDuckGo</option><option value="google">Google only</option><option value="duckduckgo">DuckDuckGo only</option></select></label>
           <label class="field"><span>Timeout (seconds)</span><input id="timeout" type="number" min="1" max="120" value="15"></label>
         </div>
-        <label class="field" id="folder-field"><span>Save location</span><input id="folder" type="text" placeholder="Folder on this computer"><small>Choose where this run will be saved. Turn this question off in Settings to reuse the last folder.</small></label>
+        <div class="grid-2">
+          <label class="field"><span>Placement</span><select id="placement"><option value="subfolder">New folder each run</option><option value="direct">Directly in chosen folder</option></select></label>
+          <label class="field"><span>Output</span><select id="output"><option value="zip">ZIP only</option><option value="html">HTML files only</option><option value="both">HTML files and ZIP</option></select></label>
+        </div>
+        <div class="field" id="folder-field"><span>Save location</span>
+          <div class="folder-row"><button id="pick" class="secondary" type="button">Choose folder</button><span id="folder-path" class="folder-path">No folder chosen</span></div>
+          <input id="folder" class="hidden" type="text" placeholder="Type a folder path">
+          <small id="folder-hint">A native folder dialog opens on this machine. If one is not available, type a path instead.</small>
+        </div>
         <button id="run" class="primary" type="submit">Run search</button>
       </form>
 
@@ -869,13 +885,25 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     </section>
   </main>
 </div>
+<div id="collision" class="modal hidden">
+  <div class="modal-card">
+    <h2>Files with these names already exist</h2>
+    <p class="sub">Choose once for all of them. Your answer applies to every file in this run.</p>
+    <ul id="collision-list" class="collision-list"></ul>
+    <div class="actions">
+      <button id="collision-rename" class="primary" type="button" style="width:auto">Save with new name</button>
+      <button id="collision-overwrite" class="secondary" type="button">Overwrite</button>
+      <button id="collision-skip" class="secondary" type="button">Skip</button>
+    </div>
+  </div>
+</div>
 <div id="toast" class="toast hidden"></div>
 
 <script>
 (function(){
   'use strict';
   var KEY = 'q2h.settings';
-  var defaults = {baseFolder:__Q2H_DEFAULT_BASE__, askEachRun:true, autoFolder:false, count:10, source:'auto', timeout:15, saveManifest:true, addBaseTag:true, lastFolder:''};
+  var defaults = {baseFolder:__Q2H_DEFAULT_BASE__, askEachRun:true, autoFolder:false, count:10, source:'auto', timeout:15, saveManifest:true, addBaseTag:true, lastFolder:'', placement:'subfolder', output:'zip'};
   var settings;
   try { settings = Object.assign({}, defaults, JSON.parse(localStorage.getItem(KEY) || '{}')); }
   catch (error) { settings = Object.assign({}, defaults); }
@@ -885,6 +913,8 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
   var timer = null;
   var lastRun = null;
   var toastTimer = null;
+  var chosenFolder = settings.lastFolder || settings.baseFolder || '';
+  var folderFallback = false;
 
   function notify(message, bad){
     var box = byId('toast');
@@ -915,16 +945,58 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
   }
 
   function syncFolderField(){
-    var hidden = !!settings.autoFolder;
-    byId('folder-field').classList.toggle('hidden', hidden);
-    byId('folder').value = settings.lastFolder || settings.baseFolder || '';
+    byId('folder-field').classList.toggle('hidden', !!settings.autoFolder);
+    byId('folder-path').textContent = chosenFolder || 'No folder chosen';
+    byId('folder').classList.toggle('hidden', !folderFallback);
+    byId('folder').value = chosenFolder;
     byId('count').value = settings.count;
     byId('source').value = settings.source;
     byId('timeout').value = settings.timeout;
+    byId('placement').value = settings.placement;
+    byId('output').value = settings.output;
+    byId('zip').style.display = settings.output === 'html' ? 'none' : '';
   }
 
   function folderForRun(){
-    return settings.autoFolder ? (settings.lastFolder || settings.baseFolder || '') : byId('folder').value.trim();
+    if (settings.autoFolder) return settings.lastFolder || settings.baseFolder || '';
+    return folderFallback ? byId('folder').value.trim() : chosenFolder;
+  }
+
+  function chooseFolder(){
+    var button = byId('pick');
+    button.disabled = true;
+    button.textContent = 'Choosing…';
+    fetch('/api/pick-folder', {method:'POST'})
+      .then(function(response){ return response.json().then(function(data){ return {ok:response.ok, data:data}; }); })
+      .then(function(out){
+        button.disabled = false;
+        button.textContent = 'Choose folder';
+        if (!out.ok) {
+          folderFallback = true;
+          syncFolderField();
+          notify(out.data.error || 'Could not open the folder dialog. Type a path instead.', true);
+          return;
+        }
+        if (!out.data.path) { notify('Folder selection cancelled.'); return; }
+        chosenFolder = out.data.path;
+        folderFallback = false;
+        syncFolderField();
+        notify('Folder selected.');
+      })
+      .catch(function(error){
+        button.disabled = false;
+        button.textContent = 'Choose folder';
+        notify(error.message, true);
+      });
+  }
+
+  function decideCollision(choice){
+    byId('collision').classList.add('hidden');
+    fetch('/api/decision?id=' + encodeURIComponent(jobId), {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({choice:choice})
+    }).catch(function(error){ notify(error.message, true); });
   }
 
   function formatBytes(bytes){
@@ -935,7 +1007,9 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
   function renderResults(result){
     lastRun = result;
     byId('results').classList.remove('hidden');
-    byId('results-sub').textContent = 'Saved ' + result.files.length + ' files in a new folder.';
+    byId('results-sub').textContent = 'Saved ' + result.files.length + ' files '
+      + (result.placement === 'direct' ? 'directly in the chosen folder.' : 'in a new folder.');
+    byId('zip').style.display = settings.output === 'html' ? 'none' : '';
     byId('results-meta').innerHTML = '';
     var meta = [['Source', result.source], ['Query', result.query], ['Folder', result.name]];
     meta.forEach(function(item){
@@ -1002,8 +1076,13 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
       source: byId('source').value,
       timeout: Number(byId('timeout').value) || 15,
       saveManifest: !!settings.saveManifest,
-      addBaseTag: !!settings.addBaseTag
+      addBaseTag: !!settings.addBaseTag,
+      placement: byId('placement').value,
+      output: byId('output').value
     };
+    settings.placement = payload.placement;
+    settings.output = payload.output;
+    saveSettings();
 
     byId('run').disabled = true;
     byId('results').classList.add('hidden');
@@ -1028,6 +1107,17 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     fetch('/api/status?id=' + encodeURIComponent(jobId))
       .then(function(response){ return response.json(); })
       .then(function(status){
+        if (status.state === 'awaiting') {
+          byId('progress-text').textContent = 'Waiting for your answer…';
+          byId('collision-list').innerHTML = '';
+          (status.conflicts || []).forEach(function(name){
+            var item = document.createElement('li');
+            item.textContent = name;
+            byId('collision-list').appendChild(item);
+          });
+          byId('collision').classList.remove('hidden');
+          return;
+        }
         if (status.state === 'running') {
           byId('progress-text').textContent = status.message || 'Working…';
           var total = status.total || 1;
@@ -1038,6 +1128,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
         }
         clearInterval(timer);
         timer = null;
+        byId('collision').classList.add('hidden');
         byId('progress').classList.add('hidden');
         byId('run').disabled = false;
         if (status.state === 'error') { notify(status.error || 'The run failed.', true); return; }
@@ -1057,6 +1148,10 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     notify(message, true);
   }
 
+  byId('pick').addEventListener('click', chooseFolder);
+  byId('collision-rename').addEventListener('click', function(){ decideCollision('rename'); });
+  byId('collision-overwrite').addEventListener('click', function(){ decideCollision('overwrite'); });
+  byId('collision-skip').addEventListener('click', function(){ decideCollision('skip'); });
   byId('nav-search').addEventListener('click', function(){ showScreen('search'); });
   byId('nav-settings').addEventListener('click', function(){ renderSettings(); showScreen('settings'); });
   byId('run-form').addEventListener('submit', function(event){ event.preventDefault(); startRun(); });
@@ -1082,8 +1177,11 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
   });
   byId('reset').addEventListener('click', function(){
     settings = Object.assign({}, defaults);
+    chosenFolder = settings.baseFolder;
+    folderFallback = false;
     saveSettings();
     renderSettings();
+    syncFolderField();
     notify('Settings reset.');
   });
 
