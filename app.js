@@ -3,6 +3,11 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const http = require('node:http');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
+
+const execFileAsync = promisify(execFile);
+const PICK_TIMEOUT_MS = 120000;
 
 // app.js — Query to HTML
 //
@@ -1144,6 +1149,105 @@ function clamp(value, low, high) {
 }
 
 /**
+ * Describe the native folder dialog command for a given platform.
+ *
+ * Keeping the command choice separate from running it makes the logic
+ * easy to check without opening a real dialog. All arguments are passed
+ * as an array, so nothing from the browser is ever put into a shell.
+ *
+ * @param {string} platform - Node platform name, such as win32 or darwin
+ * @returns {{command: string, args: string[]}|null} command, or null if unsupported
+ */
+function folderPickerCommand(platform = process.platform) {
+  if (platform === 'win32') {
+    return {
+      command: 'powershell.exe',
+      args: [
+        '-NoProfile',
+        '-STA',
+        '-Command',
+        "Add-Type -AssemblyName System.Windows.Forms; $dialog = New-Object System.Windows.Forms.FolderBrowserDialog; $dialog.Description = 'Choose the download folder'; if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }",
+      ],
+    };
+  }
+
+  if (platform === 'darwin') {
+    return {
+      command: 'osascript',
+      args: [
+        '-e', 'tell application "System Events" to activate',
+        '-e', 'set chosenFolder to POSIX path of (choose folder)',
+        '-e', 'return chosenFolder',
+      ],
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Open a native folder dialog and return the folder the user chose.
+ *
+ * The dialog runs on the machine hosting the app. That is the user's own
+ * machine when the app is run locally. On a server with no screen there is
+ * no dialog to open, so the caller falls back to a typed path. Cancelling
+ * returns a null path, which is not an error.
+ *
+ * @returns {Promise<{ok: boolean, path: string|null, error: string, cancelled: boolean}>}
+ */
+async function pickFolder() {
+  const command = folderPickerCommand();
+  if (!command) {
+    return {
+      ok: false,
+      path: null,
+      error: 'No native folder dialog is available on this system. Type a folder path instead.',
+      cancelled: false,
+    };
+  }
+
+  try {
+    const { stdout } = await execFileAsync(command.command, command.args, {
+      timeout: PICK_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+    });
+    const lines = stdout.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const rawPath = lines.length ? lines[lines.length - 1] : '';
+    if (!rawPath) return { ok: true, path: null, error: '', cancelled: true };
+
+    const selected = path.normalize(rawPath).replace(/[\\/]+$/, '') || path.parse(rawPath).root;
+    const info = await fs.stat(selected);
+    if (!info.isDirectory()) {
+      return { ok: false, path: null, error: 'That selection is not a folder.', cancelled: false };
+    }
+    return { ok: true, path: selected, error: '', cancelled: false };
+  } catch (error) {
+    if (error?.killed || error?.code === 'ETIMEDOUT') {
+      return { ok: true, path: null, error: '', cancelled: true };
+    }
+    if (process.platform === 'darwin' && /cancel/i.test(String(error?.stderr || ''))) {
+      return { ok: true, path: null, error: '', cancelled: true };
+    }
+    return { ok: false, path: null, error: String(error?.message || error), cancelled: false };
+  }
+}
+
+/**
+ * Answer a request to open the folder dialog.
+ *
+ * @param {http.ServerResponse} response - the response to answer
+ * @returns {Promise<void>}
+ */
+async function handlePickFolder(response) {
+  const picked = await pickFolder();
+  if (!picked.ok) {
+    sendJson(response, 400, { error: picked.error });
+    return;
+  }
+  sendJson(response, 200, { path: picked.path, cancelled: picked.cancelled });
+}
+
+/**
  * Do one run in the background and keep its progress in the job map.
  *
  * The browser starts a job and then asks for its status. Keeping the work
@@ -1385,6 +1489,11 @@ function startServer() {
         return;
       }
 
+      if (request.method === 'POST' && url.pathname === '/api/pick-folder') {
+        await handlePickFolder(response);
+        return;
+      }
+
       if (request.method === 'POST' && url.pathname === '/api/run') {
         await handleRun(response, await readJson(request));
         return;
@@ -1419,4 +1528,4 @@ function startServer() {
 
 if (require.main === module) startServer();
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
