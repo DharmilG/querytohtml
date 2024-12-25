@@ -8,6 +8,8 @@ const { promisify } = require('node:util');
 
 const execFileAsync = promisify(execFile);
 const PICK_TIMEOUT_MS = 120000;
+const DECISION_TIMEOUT_MS = 300000;
+const decisionWaiters = new Map();
 
 // app.js — Query to HTML
 //
@@ -1346,6 +1348,89 @@ async function handlePickFolder(response) {
 }
 
 /**
+ * List the target names that already exist in a folder.
+ *
+ * @param {string} folder - folder that will receive the files
+ * @param {string[]} names - file names planned for this run
+ * @returns {Promise<string[]>} names that are already taken
+ */
+async function findConflicts(folder, names) {
+  const conflicts = [];
+  for (const name of names) {
+    try {
+      await fs.access(resolveInside(folder, name));
+      conflicts.push(name);
+    } catch {
+      // A missing file is exactly what we want, so there is nothing to do.
+    }
+  }
+  return conflicts;
+}
+
+/**
+ * Pause a run and wait for the user's single answer about conflicts.
+ *
+ * The job is marked awaiting so the polling page can show the question.
+ * A promise holds the run open until the browser posts a decision. If no
+ * answer arrives, saving under a new name is used because it destroys no
+ * existing file.
+ *
+ * @param {string} jobId - id of the paused job
+ * @param {object} job - mutable job state
+ * @param {string[]} conflicts - names that already exist
+ * @param {number} timeoutMs - how long to wait before choosing rename
+ * @returns {Promise<'rename'|'overwrite'|'skip'>} the chosen action
+ */
+function askForDecision(jobId, job, conflicts, timeoutMs = DECISION_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+
+    const finish = (choice) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      decisionWaiters.delete(jobId);
+      job.state = 'running';
+      job.conflicts = [];
+      job.message = 'Writing files…';
+      resolve(choice);
+    };
+
+    timer = setTimeout(() => finish('rename'), timeoutMs);
+    decisionWaiters.set(jobId, finish);
+    job.conflicts = conflicts;
+    job.state = 'awaiting';
+    job.message = 'Waiting for your answer…';
+  });
+}
+
+/**
+ * Answer the question a paused run is waiting on.
+ *
+ * @param {http.ServerResponse} response - the response to answer
+ * @param {URL} url - request URL containing the job id
+ * @param {object} body - request body containing the choice
+ */
+function handleDecision(response, url, body) {
+  const jobId = url.searchParams.get('id') || '';
+  const finish = decisionWaiters.get(jobId);
+  if (!finish) {
+    sendJson(response, 404, { error: 'No question is waiting for this job.' });
+    return;
+  }
+
+  const choice = ['rename', 'overwrite', 'skip'].includes(body.choice) ? body.choice : '';
+  if (!choice) {
+    sendJson(response, 400, { error: 'Choose rename, overwrite, or skip.' });
+    return;
+  }
+
+  finish(choice);
+  sendJson(response, 200, { ok: true });
+}
+
+/**
  * Do one run in the background and keep its progress in the job map.
  *
  * The browser starts a job and then asks for its status. Keeping the work
@@ -1474,6 +1559,7 @@ function handleStatus(response, url) {
     total: job.total,
     error: job.error,
     result: job.result,
+    conflicts: job.conflicts || [],
   });
 }
 
@@ -1592,6 +1678,11 @@ function startServer() {
         return;
       }
 
+      if (request.method === 'POST' && url.pathname === '/api/decision') {
+        handleDecision(response, url, await readJson(request));
+        return;
+      }
+
       if (request.method === 'POST' && url.pathname === '/api/run') {
         await handleRun(response, await readJson(request));
         return;
@@ -1626,4 +1717,4 @@ function startServer() {
 
 if (require.main === module) startServer();
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, findConflicts, askForDecision, handleDecision, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
