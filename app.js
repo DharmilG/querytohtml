@@ -527,7 +527,48 @@ function pageFileName(url, index, used) {
 }
 
 /**
- * Save a whole run into a fresh folder under the chosen base folder.
+ * Work out every file name a run will use, before any writing happens.
+ *
+ * Doing this first lets the caller ask about clashes once, instead of
+ * discovering them halfway through a run. The manifest is included so it
+ * is covered by the same question.
+ *
+ * @param {Array<{url: string}>} pages - fetched pages
+ * @param {boolean} saveManifest - whether a manifest will be written
+ * @returns {string[]} planned file names in write order
+ */
+function planFileNames(pages, saveManifest = true) {
+  const used = new Set();
+  const names = pages.map((page, index) => pageFileName(page.url, index, used));
+  if (saveManifest) names.push('manifest.json');
+  return names;
+}
+
+/**
+ * Find a free name by adding -2, -3, and so on before the extension.
+ *
+ * @param {string} folder - folder to check
+ * @param {string} name - name that is already taken
+ * @returns {Promise<string>} a name that does not exist yet
+ */
+async function uniqueOnDisk(folder, name) {
+  const extension = path.extname(name);
+  const stem = extension ? name.slice(0, -extension.length) : name;
+  let suffix = 2;
+
+  while (true) {
+    const candidate = `${stem}-${suffix}${extension}`;
+    try {
+      await fs.access(resolveInside(folder, candidate));
+      suffix += 1;
+    } catch {
+      return candidate;
+    }
+  }
+}
+
+/**
+ * Save a whole run into the chosen folder.
  *
  * This function owns the file system work: make the base folder, make a
  * run folder that cannot collide with an earlier one, write every page,
@@ -537,8 +578,9 @@ function pageFileName(url, index, used) {
  * @param {string} baseFolder - folder the user chose
  * @param {string} query - the search query
  * @param {Array<{url: string, ok: boolean, html: string, error: string}>} pages - fetched pages
- * @param {object} options - time, base tag, manifest, source, notes, complete
- * @returns {Promise<{folder: string, name: string, files: Array<object>, manifest: object|null}>}
+ * @param {object} options - time, base tag, manifest, source, notes, placement,
+ *   conflictAction, and the pre-planned file names
+ * @returns {Promise<{folder: string, name: string, files: Array<object>, manifest: object|null, placement: string}>}
  */
 async function writeRunFiles(baseFolder, query, pages, options = {}) {
   const {
@@ -548,30 +590,61 @@ async function writeRunFiles(baseFolder, query, pages, options = {}) {
     source = 'unknown',
     notes = [],
     complete = false,
+    placement = 'subfolder',
+    conflictAction = 'overwrite',
+    fileNames = null,
   } = options;
 
   await fs.mkdir(path.resolve(baseFolder), { recursive: true });
 
   const name = runFolderName(query, now);
-  let folder = resolveInside(baseFolder, name);
+  const direct = placement === 'direct';
+  let folder = direct ? resolveInside(baseFolder) : resolveInside(baseFolder, name);
 
-  // Two runs started in the same second must not overwrite each other.
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await fs.mkdir(folder);
-      break;
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      folder = resolveInside(baseFolder, `${name}-${attempt + 1}`);
+  if (!direct) {
+    // Two runs started in the same second must not overwrite each other.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await fs.mkdir(folder);
+        break;
+      } catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        folder = resolveInside(baseFolder, `${name}-${attempt + 1}`);
+      }
     }
   }
 
-  const used = new Set();
+  const planned = fileNames || planFileNames(pages, saveManifest);
   const files = [];
+
+  // One rule decides what to do with any name that is already taken.
+  const targetName = async (plannedName) => {
+    try {
+      await fs.access(resolveInside(folder, plannedName));
+    } catch {
+      return plannedName;
+    }
+    if (conflictAction === 'skip') return null;
+    if (conflictAction === 'rename') return uniqueOnDisk(folder, plannedName);
+    return plannedName;
+  };
 
   for (let index = 0; index < pages.length; index += 1) {
     const page = pages[index];
-    const fileName = pageFileName(page.url, index, used);
+    const fileName = await targetName(planned[index]);
+
+    if (!fileName) {
+      files.push({
+        name: planned[index],
+        url: page.url,
+        ok: false,
+        error: 'Skipped because the file already exists',
+        bytes: 0,
+        skipped: true,
+      });
+      continue;
+    }
+
     const content = page.ok
       ? (addBaseTag ? injectBaseTag(page.html, page.url) : page.html)
       : errorStub(page.url, page.error);
@@ -588,15 +661,18 @@ async function writeRunFiles(baseFolder, query, pages, options = {}) {
 
   let manifest = null;
   if (saveManifest) {
-    manifest = { query, createdAt: now.toISOString(), source, complete, notes, files };
-    await fs.writeFile(
-      resolveInside(folder, 'manifest.json'),
-      JSON.stringify(manifest, null, 2),
-      'utf8'
-    );
+    const manifestName = await targetName(planned[pages.length] || 'manifest.json');
+    if (manifestName) {
+      manifest = { query, createdAt: now.toISOString(), source, complete, notes, files, placement };
+      await fs.writeFile(
+        resolveInside(folder, manifestName),
+        JSON.stringify(manifest, null, 2),
+        'utf8'
+      );
+    }
   }
 
-  return { folder, name: path.basename(folder), files, manifest };
+  return { folder, name: direct ? name : path.basename(folder), files, manifest, placement };
 }
 
 /**
@@ -1717,4 +1793,4 @@ function startServer() {
 
 if (require.main === module) startServer();
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, findConflicts, askForDecision, handleDecision, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, findConflicts, askForDecision, handleDecision, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
