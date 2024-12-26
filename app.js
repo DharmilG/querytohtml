@@ -1507,6 +1507,32 @@ function handleDecision(response, url, body) {
 }
 
 /**
+ * Build a ZIP for a run and save a copy beside its files.
+ *
+ * Both the run engine and the download button need this, so it lives in
+ * one function. Renamed manifests are accepted as well as manifest.json,
+ * because direct placement may have given the manifest a new name.
+ *
+ * @param {string} folder - folder holding the run files
+ * @param {string} name - run name used for the archive file
+ * @returns {Promise<{buffer: Buffer, path: string, bytes: number}>}
+ */
+async function createRunZip(folder, name) {
+  const names = (await fs.readdir(folder))
+    .filter((file) => /\.html$/i.test(file) || /^manifest.*\.json$/i.test(file))
+    .sort();
+  const entries = [];
+  for (const file of names) {
+    entries.push({ name: file, data: await fs.readFile(resolveInside(folder, file)) });
+  }
+
+  const buffer = buildZip(entries, new Date());
+  const archivePath = resolveInside(folder, `${name}.zip`);
+  await fs.writeFile(archivePath, buffer);
+  return { buffer, path: archivePath, bytes: buffer.length };
+}
+
+/**
  * Do one run in the background and keep its progress in the job map.
  *
  * The browser starts a job and then asks for its status. Keeping the work
@@ -1538,6 +1564,16 @@ async function executeRun(jobId, job, options) {
       job.done = index + 1;
     }
 
+    const fileNames = planFileNames(pages, options.saveManifest);
+    let conflictAction = 'overwrite';
+    if (options.placement === 'direct') {
+      const conflicts = await findConflicts(options.folder, fileNames);
+      if (conflicts.length) {
+        job.message = 'Waiting for your answer about existing files…';
+        conflictAction = await askForDecision(jobId, job, conflicts);
+      }
+    }
+
     job.message = 'Writing files…';
     const run = await writeRunFiles(options.folder, options.query, pages, {
       now: new Date(),
@@ -1546,6 +1582,9 @@ async function executeRun(jobId, job, options) {
       complete: search.complete,
       saveManifest: options.saveManifest,
       addBaseTag: options.addBaseTag,
+      placement: options.placement,
+      conflictAction,
+      fileNames,
     });
 
     runs.set(run.name, {
@@ -1553,6 +1592,13 @@ async function executeRun(jobId, job, options) {
       base: options.folder,
       createdAt: new Date().toISOString(),
     });
+
+    let zipName = '';
+    if (options.output !== 'html') {
+      job.message = 'Building ZIP…';
+      zipName = `${run.name}.zip`;
+      await createRunZip(run.folder, run.name);
+    }
 
     job.result = {
       name: run.name,
@@ -1562,6 +1608,9 @@ async function executeRun(jobId, job, options) {
       complete: search.complete,
       notes: search.notes,
       files: run.files,
+      placement: options.placement,
+      output: options.output,
+      zipName,
     };
     job.state = 'done';
     job.message = 'Done.';
@@ -1587,6 +1636,8 @@ async function handleRun(response, body) {
   }
 
   const source = ['auto', 'google', 'duckduckgo'].includes(body.source) ? body.source : 'auto';
+  const placement = ['subfolder', 'direct'].includes(body.placement) ? body.placement : 'subfolder';
+  const output = ['zip', 'html', 'both'].includes(body.output) ? body.output : 'zip';
   const options = {
     query,
     folder: path.resolve(folder),
@@ -1595,6 +1646,8 @@ async function handleRun(response, body) {
     source,
     saveManifest: body.saveManifest !== false,
     addBaseTag: body.addBaseTag !== false,
+    placement,
+    output,
   };
 
   const jobId = `job-${jobCounter += 1}`;
@@ -1659,23 +1712,14 @@ async function handleZip(response, url) {
   }
 
   try {
-    const names = (await fs.readdir(run.folder))
-      .filter((file) => /\.html$/i.test(file) || file === 'manifest.json')
-      .sort();
-    const entries = [];
-    for (const file of names) {
-      entries.push({ name: file, data: await fs.readFile(resolveInside(run.folder, file)) });
-    }
-
-    const archive = buildZip(entries, new Date());
-    await fs.writeFile(resolveInside(run.folder, `${name}.zip`), archive);
+    const archive = await createRunZip(run.folder, name);
 
     response.writeHead(200, {
       'Content-Type': 'application/zip',
       'Content-Disposition': `attachment; filename="${name}.zip"`,
-      'Content-Length': archive.length,
+      'Content-Length': archive.bytes,
     });
-    response.end(archive);
+    response.end(archive.buffer);
   } catch (error) {
     sendJson(response, 500, { error: String(error?.message || error) });
   }
@@ -1793,4 +1837,4 @@ function startServer() {
 
 if (require.main === module) startServer();
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, findConflicts, askForDecision, handleDecision, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
+module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, findConflicts, askForDecision, handleDecision, createRunZip, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
