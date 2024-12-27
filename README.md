@@ -55,12 +55,14 @@ The app has exactly two screens. Nothing else.
 
 This is where you work.
 
-- A box for your query.
+- A box for your query, plus the number of results, search source, and timeout.
+- A **Placement** select: `New folder each run` or `Directly in chosen folder`.
+- An **Output** select: `ZIP only`, `HTML files only`, or `HTML files and ZIP`. ZIP only is the default.
+- A **Choose folder** button. It opens your operating system's own folder dialog on Windows or macOS. The chosen path is shown next to the button. If no dialog is available, a text box appears so you can type a path instead.
 - A **Run** button.
-- A **Save location** box. It appears each run when the setting "Ask location each run" is on. When the setting is off, the app quietly reuses the last folder you chose.
-- A progress line, like `Fetching 4/10…`, so you know it is alive.
-- A list of the ten files with a status for each one. A failed page still gets a small stub file, so the count stays at ten.
-- A **Download ZIP** button.
+- A progress line, like `Fetching 4/10…`, so you know it is alive. If files with the same names already exist, the run pauses and asks what to do.
+- A list of the saved files with a status for each one. A failed page still gets a small stub file, so the count stays at ten.
+- A **Download ZIP** button, shown only when your Output setting includes a ZIP.
 - A **Settings** link.
 
 ### Screen 2 — Settings
@@ -80,31 +82,32 @@ This is where you decide how the app behaves. The choices are saved in your brow
 
 "Auto-use last folder" wins over "Ask location each run" when both are on. Think of it as saying: stop asking, you already know where to put things.
 
+Placement and Output are deliberately not here. They sit on the Search screen next to your query, because they are choices you may want to change from one run to the next.
+
 ## What happens when you press Run
 
 Here is the whole story, in order.
 
-1. The app reads your query and your chosen folder. It makes sure the folder exists.
-2. It creates a new subfolder with your query and the current time in the name. This is why no run ever lands on top of another run.
-3. It asks Google for results. If Google shows a CAPTCHA or refuses, it tries DuckDuckGo instead, without bothering you.
-4. It collects ten different page addresses. If the first results page does not give ten, it asks for one more page.
-5. For each address, it downloads the raw HTML with a normal browser identity, follows redirects, and stops after 15 seconds or 5 MB. Nothing is executed, and no scripts on those pages are run.
-6. It writes `01-page.html` through `10-page.html`. A small `<base>` tag is added so pictures and links that use relative paths still point to the right place when you open the file offline.
-7. It writes `manifest.json` with the query, the source addresses, the time, and whether each file worked.
-8. The screen shows you the files. When you press **Download ZIP**, the app builds a ZIP and sends it to your browser.
+1. The app reads your query, your chosen folder, and your Placement and Output choices.
+2. It asks Google for results. If Google shows a CAPTCHA or refuses, it tries DuckDuckGo instead, without bothering you.
+3. It collects ten different page addresses. If the first results page does not give ten, it asks for one more page.
+4. For each address, it downloads the raw HTML with a normal browser identity, follows redirects, and stops after 15 seconds or 5 MB. Nothing is executed, and no scripts on those pages are run.
+5. It decides the exact file names it will use, then checks whether any of them already exist. This check only matters in direct placement; a new run folder is empty by definition.
+6. If names are taken, the run pauses and shows you one list of them. You answer once for all: **Save with new name**, **Overwrite**, or **Skip**. If you do not answer in time, it saves with new names so nothing is destroyed.
+7. It writes the HTML files. A small `<base>` tag is added so pictures and links that use relative paths still point to the right place when you open a file offline. It also writes `manifest.json` unless you turned that off.
+8. If your Output includes a ZIP, it builds the archive and saves a copy beside the files. The screen then shows the files and offers the ZIP button when relevant.
 
 One failed page does not ruin the run. You still get ten files, and the manifest tells you which one could not be fetched.
 
 ## Where the files go
 
-A run looks like this:
+With **New folder each run**, a run looks like this:
 
 ```
 E:\query-to-html\downloads\
 └── typescript-generics_20261124-143022\
     ├── 01-typescript-lang-org.html
     ├── 02-example-com.html
-    ├── 03-another-site-net.html
     ├── ...
     ├── 10-last-site-io.html
     ├── manifest.json
@@ -112,6 +115,19 @@ E:\query-to-html\downloads\
 ```
 
 The folder name has two parts. The first part is your query, cleaned up so it is safe to use as a name. The second part is the date and time down to the second. Run the same query twice and you still get two different folders.
+
+With **Directly in chosen folder**, there is no new subfolder and no ZIP unless you ask for one:
+
+```
+E:\my-pages\
+├── 01-typescript-lang-org.html
+├── 02-example-com.html
+├── ...
+├── 10-last-site-io.html
+└── manifest.json
+```
+
+Because files from different runs share one folder, this is the mode where the app asks what to do with a name that already exists. If you choose **Save with new name**, the second file becomes `01-typescript-lang-org-2.html`.
 
 ## A short note about search engines
 
@@ -139,7 +155,7 @@ You can run this on your own machine for free, forever. You can also put it on t
 
 On your own machine, the app can write into folders you choose on your computer. That is the full version of the feature.
 
-Once the app is hosted somewhere else, it writes to that server's disk, not to your computer. You still get everything through the **Download ZIP** button, but the "Save location" box now means a folder on the server. Search engines also block cloud addresses more often than home addresses, so the DuckDuckGo fallback earns its keep.
+Once the app is hosted somewhere else, it writes to that server's disk, not to your computer. There is no screen on the server, so the native folder dialog cannot open; the page shows a text box instead, and the folder you type means a folder on the server. You still get everything through the **Download ZIP** button when your Output setting includes a ZIP. Search engines also block cloud addresses more often than home addresses, so the DuckDuckGo fallback earns its keep.
 
 A simple free route is Render's free web service:
 
@@ -169,6 +185,8 @@ Your settings live in the browser's local storage. There is no database and no a
 | What you see | What to do |
 | --- | --- |
 | `EADDRINUSE` | Another program owns port 3000. Use the `PORT` trick shown above. |
+| A folder dialog message says none is available | You are on a system without a native dialog, or the app is hosted. Type a folder path in the box that appears. |
+| The run pauses with a list of file names | Those files already exist in direct placement mode. Choose one answer for all of them. |
 | A CAPTCHA message | Google blocked this run. Wait a moment and try again, or pick DuckDuckGo in Settings. |
 | A file says "could not fetch" | That website refused the request. The manifest lists it. Try the query again later. |
 | The ZIP looks empty | Wait until the run finishes before downloading. Build it again with the button. |
