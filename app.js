@@ -1270,7 +1270,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 </body>
 </html>`;
 
-const DEFAULT_BASE_DIR = process.env.Q2H_BASE || path.join(__dirname, 'downloads');
+const DEFAULT_BASE_DIR = path.resolve(process.env.Q2H_BASE || path.join(__dirname, 'downloads'));
 const MAX_REQUEST_BYTES = 1024 * 1024;
 const jobs = new Map();
 const runs = new Map();
@@ -1837,4 +1837,4 @@ function startServer() {
 
 if (require.main === module) startServer();
 
-module.exports = { slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, findConflicts, askForDecision, handleDecision, createRunZip, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
+module.exports = { DEFAULT_BASE_DIR, slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, findConflicts, askForDecision, handleDecision, createRunZip, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
