@@ -968,6 +968,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
         <div class="group"><h3>Saving</h3>
           <label class="switch"><span>Save manifest.json<small>Write a small report with the query, source, and file status.</small></span><span class="toggle"><input id="s-manifest" type="checkbox"><span class="slider"></span></span></label>
           <label class="switch"><span>Add base tag<small>Keep relative links and images working when pages are opened from disk.</small></span><span class="toggle"><input id="s-base-tag" type="checkbox"><span class="slider"></span></span></label>
+          <label class="switch"><span>Auto-download ZIP<small>Start the ZIP download as soon as a run finishes, when your Output includes a ZIP.</small></span><span class="toggle"><input id="s-auto-zip" type="checkbox"><span class="slider"></span></span></label>
         </div>
         <div class="actions" style="margin-top:22px"><button class="primary" type="submit" style="width:auto">Save settings</button><button id="reset" class="secondary" type="button">Reset</button></div>
       </form>
@@ -994,7 +995,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
   var KEY = 'q2h.settings';
   var HISTORY_KEY = 'q2h.history';
   var HISTORY_LIMIT = 20;
-  var defaults = {baseFolder:__Q2H_DEFAULT_BASE__, askEachRun:true, autoFolder:false, count:10, source:'auto', timeout:15, saveManifest:true, addBaseTag:true, lastFolder:'', placement:'subfolder', output:'zip'};
+  var defaults = {baseFolder:__Q2H_DEFAULT_BASE__, askEachRun:true, autoFolder:false, count:10, source:'auto', timeout:15, saveManifest:true, addBaseTag:true, lastFolder:'', placement:'subfolder', output:'zip', autoDownload:false};
   var settings;
   try { settings = Object.assign({}, defaults, JSON.parse(localStorage.getItem(KEY) || '{}')); }
   catch (error) { settings = Object.assign({}, defaults); }
@@ -1068,6 +1069,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     byId('s-timeout').value = settings.timeout;
     byId('s-manifest').checked = !!settings.saveManifest;
     byId('s-base-tag').checked = !!settings.addBaseTag;
+    byId('s-auto-zip').checked = !!settings.autoDownload;
   }
 
   function syncFolderField(){
@@ -1304,6 +1306,9 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
         saveSettings();
         renderResults(status.result);
         notify('Done. ' + status.result.files.length + ' files saved.');
+        if (settings.autoDownload && status.result.zipName) {
+          window.location.href = '/api/zip?run=' + encodeURIComponent(status.result.name);
+        }
       })
       .catch(function(error){ fail(error.message); });
   }
@@ -1342,6 +1347,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     settings.timeout = Number(byId('s-timeout').value) || 15;
     settings.saveManifest = byId('s-manifest').checked;
     settings.addBaseTag = byId('s-base-tag').checked;
+    settings.autoDownload = byId('s-auto-zip').checked;
     saveSettings();
     syncFolderField();
     showScreen('search');
