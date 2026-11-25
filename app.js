@@ -937,6 +937,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
       <section id="progress" class="card hidden">
         <div class="progress-top"><strong id="progress-text">Starting…</strong><span id="progress-count"></span></div>
         <div class="track"><div id="progress-fill" class="fill"></div></div>
+        <button id="stop" class="secondary" type="button" style="margin-top:16px">Stop this run</button>
       </section>
 
       <section id="results" class="card hidden">
@@ -1115,6 +1116,16 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
       });
   }
 
+  function cancelRun(){
+    if (!jobId) return;
+    byId('stop').disabled = true;
+    byId('stop').textContent = 'Stopping…';
+    fetch('/api/cancel?id=' + encodeURIComponent(jobId), {method:'POST'})
+      .then(function(response){ return response.json(); })
+      .then(function(data){ if (!data.ok) notify(data.error || 'Could not stop the run.', true); })
+      .catch(function(error){ notify(error.message, true); });
+  }
+
   function decideCollision(choice){
     byId('collision').classList.add('hidden');
     fetch('/api/decision?id=' + encodeURIComponent(jobId), {
@@ -1216,6 +1227,8 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     byId('progress-text').textContent = 'Starting…';
     byId('progress-fill').style.width = '4%';
     byId('progress-count').textContent = '';
+    byId('stop').disabled = false;
+    byId('stop').textContent = 'Stop this run';
 
     fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
       .then(function(response){ return response.json().then(function(data){ return {ok:response.ok, data:data}; }); })
@@ -1257,6 +1270,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
         byId('collision').classList.add('hidden');
         byId('progress').classList.add('hidden');
         byId('run').disabled = false;
+        if (status.state === 'cancelled') { notify('Run stopped. Files written so far are kept.'); return; }
         if (status.state === 'error') { notify(status.error || 'The run failed.', true); return; }
         settings.lastFolder = status.result.folderPath || folderForRun();
         saveSettings();
@@ -1274,6 +1288,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     notify(message, true);
   }
 
+  byId('stop').addEventListener('click', cancelRun);
   byId('clear-history').addEventListener('click', function(){ saveHistory([]); });
   byId('pick').addEventListener('click', chooseFolder);
   byId('collision-rename').addEventListener('click', function(){ decideCollision('rename'); });
@@ -1459,6 +1474,30 @@ async function pickFolder() {
 }
 
 /**
+ * Mark a running job as cancelled.
+ *
+ * The flag is checked by executeRun() between pages and before writing,
+ * so a cancelled run stops at a safe point. Cancelling a finished job
+ * does nothing and reports a 404.
+ *
+ * @param {http.ServerResponse} response - the response to answer
+ * @param {URL} url - request URL containing the job id
+ */
+function handleCancel(response, url) {
+  const job = jobs.get(url.searchParams.get('id') || '');
+  if (!job) {
+    sendJson(response, 404, { error: 'Unknown job.' });
+    return;
+  }
+
+  job.cancelled = true;
+  const decision = decisionWaiters.get(url.searchParams.get('id'));
+  if (decision) decision('rename');
+
+  sendJson(response, 200, { ok: true });
+}
+
+/**
  * Answer a request to open the folder dialog.
  *
  * @param {http.ServerResponse} response - the response to answer
@@ -1598,6 +1637,11 @@ async function createRunZip(folder, name) {
 async function executeRun(jobId, job, options) {
   try {
     job.message = 'Searching for results…';
+    if (job.cancelled) {
+      job.state = 'cancelled';
+      job.message = 'Cancelled.';
+      return;
+    }
     const search = await searchWeb(options.query, options.count, options.source, options.timeout);
     if (search.urls.length === 0) {
       throw new Error(search.notes.join(' ') || 'No results found. Try another query or source.');
@@ -1606,12 +1650,23 @@ async function executeRun(jobId, job, options) {
     job.total = search.urls.length;
     const pages = [];
     for (let index = 0; index < search.urls.length; index += 1) {
+      if (job.cancelled) {
+        job.state = 'cancelled';
+        job.message = 'Cancelled.';
+        return;
+      }
       job.message = `Fetching page ${index + 1} of ${search.urls.length}…`;
       job.done = index;
       const page = await fetchPage(search.urls[index], options.timeout);
       page.url = search.urls[index];
       pages.push(page);
       job.done = index + 1;
+    }
+
+    if (job.cancelled) {
+      job.state = 'cancelled';
+      job.message = 'Cancelled.';
+      return;
     }
 
     const fileNames = planFileNames(pages, options.saveManifest);
@@ -1622,6 +1677,12 @@ async function executeRun(jobId, job, options) {
         job.message = 'Waiting for your answer about existing files…';
         conflictAction = await askForDecision(jobId, job, conflicts);
       }
+    }
+
+    if (job.cancelled) {
+      job.state = 'cancelled';
+      job.message = 'Cancelled.';
+      return;
     }
 
     job.message = 'Writing files…';
@@ -1644,6 +1705,11 @@ async function executeRun(jobId, job, options) {
     });
 
     let zipName = '';
+    if (job.cancelled) {
+      job.state = 'cancelled';
+      job.message = 'Cancelled after saving files.';
+      return;
+    }
     if (options.output !== 'html') {
       job.message = 'Building ZIP…';
       zipName = `${run.name}.zip`;
@@ -1734,6 +1800,7 @@ function handleStatus(response, url) {
   sendJson(response, 200, {
     state: job.state,
     message: job.message,
+    cancelled: Boolean(job.cancelled),
     done: job.done,
     total: job.total,
     error: job.error,
@@ -1848,6 +1915,11 @@ function startServer() {
         return;
       }
 
+      if (request.method === 'POST' && url.pathname === '/api/cancel') {
+        handleCancel(response, url);
+        return;
+      }
+
       if (request.method === 'POST' && url.pathname === '/api/decision') {
         handleDecision(response, url, await readJson(request));
         return;
@@ -1887,4 +1959,4 @@ function startServer() {
 
 if (require.main === module) startServer();
 
-module.exports = { DEFAULT_BASE_DIR, slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, findConflicts, askForDecision, handleDecision, createRunZip, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
+module.exports = { DEFAULT_BASE_DIR, slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, findConflicts, askForDecision, handleDecision, handleCancel, createRunZip, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
