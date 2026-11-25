@@ -854,6 +854,14 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 .modal-card h2{margin:0 0 6px;font-size:20px}
 .collision-list{max-height:180px;overflow:auto;background:#f8fafc;border:1px solid var(--line);border-radius:11px;padding:10px 14px;margin:0 0 18px;font-size:13px;color:var(--muted)}
 .collision-list li{margin:4px 0}
+.history{display:flex;flex-wrap:wrap;gap:8px;margin:-6px 0 18px}
+.history:empty{display:none}
+.chip{border:1px solid var(--line);background:#fff;border-radius:99px;padding:6px 12px;font:inherit;font-size:12px;color:var(--muted);cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+.history-head{display:flex;align-items:center;gap:10px;margin:0 0 8px}
+.history-head span{font-size:12px;color:var(--muted)}
+.history-head button{border:0;background:transparent;color:var(--muted);font:inherit;font-size:12px;cursor:pointer;padding:0}
+.history-head button:hover{color:var(--bad)}
 .hidden{display:none!important}
 .progress-top{display:flex;justify-content:space-between;gap:12px;font-size:13px;margin-bottom:10px}
 .progress-top strong{color:var(--accent)}
@@ -907,6 +915,8 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 
       <form id="run-form" class="card">
         <label class="field"><span>Search query</span><textarea id="query" rows="3" placeholder="For example: nodejs stream guide" required></textarea></label>
+        <div class="history-head"><span>Recent searches</span><button id="clear-history" type="button">Clear</button></div>
+        <div id="history" class="history"></div>
         <div class="grid">
           <label class="field"><span>Results</span><input id="count" type="number" min="1" max="50" value="10"></label>
           <label class="field"><span>Search source</span><select id="source"><option value="auto">Google, then DuckDuckGo</option><option value="google">Google only</option><option value="duckduckgo">DuckDuckGo only</option></select></label>
@@ -981,6 +991,8 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 (function(){
   'use strict';
   var KEY = 'q2h.settings';
+  var HISTORY_KEY = 'q2h.history';
+  var HISTORY_LIMIT = 20;
   var defaults = {baseFolder:__Q2H_DEFAULT_BASE__, askEachRun:true, autoFolder:false, count:10, source:'auto', timeout:15, saveManifest:true, addBaseTag:true, lastFolder:'', placement:'subfolder', output:'zip'};
   var settings;
   try { settings = Object.assign({}, defaults, JSON.parse(localStorage.getItem(KEY) || '{}')); }
@@ -1010,6 +1022,41 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
   }
 
   function saveSettings(){ localStorage.setItem(KEY, JSON.stringify(settings)); }
+
+  function loadHistory(){
+    try {
+      var list = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+      return Array.isArray(list) ? list.filter(function(item){ return typeof item === 'string' && item; }).slice(0, HISTORY_LIMIT) : [];
+    } catch (error) { return []; }
+  }
+
+  function saveHistory(list){
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_LIMIT)));
+    renderHistory();
+  }
+
+  function rememberQuery(query){
+    var list = loadHistory().filter(function(item){ return item !== query; });
+    list.unshift(query);
+    saveHistory(list);
+  }
+
+  function renderHistory(){
+    var box = byId('history');
+    box.innerHTML = '';
+    loadHistory().forEach(function(query){
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip';
+      chip.textContent = query;
+      chip.title = query;
+      chip.addEventListener('click', function(){
+        byId('query').value = query;
+        byId('query').focus();
+      });
+      box.appendChild(chip);
+    });
+  }
 
   function renderSettings(){
     byId('s-base').value = settings.baseFolder || '';
@@ -1158,6 +1205,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
       placement: byId('placement').value,
       output: byId('output').value
     };
+    rememberQuery(query);
     settings.placement = payload.placement;
     settings.output = payload.output;
     saveSettings();
@@ -1226,6 +1274,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     notify(message, true);
   }
 
+  byId('clear-history').addEventListener('click', function(){ saveHistory([]); });
   byId('pick').addEventListener('click', chooseFolder);
   byId('collision-rename').addEventListener('click', function(){ decideCollision('rename'); });
   byId('collision-overwrite').addEventListener('click', function(){ decideCollision('overwrite'); });
@@ -1265,6 +1314,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 
   renderSettings();
   syncFolderField();
+  renderHistory();
 })();
 </script>
 </body>
