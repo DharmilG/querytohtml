@@ -177,6 +177,91 @@ function normalizeResultUrl(raw, base) {
 }
 
 /**
+ * Build the request for an official search API.
+ *
+ * Three providers are supported with the same result shape: Google
+ * Custom Search JSON API, Brave Search API, and SerpAPI. The key is sent
+ * only in the server request, never back to the browser.
+ *
+ * @param {string} provider - google-cse, brave, or serpapi
+ * @param {string} query - search query
+ * @param {object} credentials - key, cx, and optional endpoint
+ * @returns {{url: string, headers: object}|null} request details
+ */
+function buildApiRequest(provider, query, credentials = {}) {
+  const key = credentials.key || '';
+  if (!key) return null;
+  const q = encodeURIComponent(query);
+
+  if (provider === 'google-cse') {
+    if (!credentials.cx) return null;
+    return {
+      url: `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(key)}&cx=${encodeURIComponent(credentials.cx)}&q=${q}&num=10`,
+      headers: {},
+    };
+  }
+  if (provider === 'brave') {
+    return {
+      url: `https://api.search.brave.com/res/v1/web/search?q=${q}&count=10`,
+      headers: { 'X-Subscription-Token': key, Accept: 'application/json' },
+    };
+  }
+  if (provider === 'serpapi') {
+    return {
+      url: `https://serpapi.com/search.json?engine=google&q=${q}&num=10&api_key=${encodeURIComponent(key)}`,
+      headers: {},
+    };
+  }
+  return null;
+}
+
+/**
+ * Turn an official API response into a plain list of result URLs.
+ *
+ * @param {string} provider - provider name
+ * @param {object} data - parsed JSON response
+ * @returns {string[]} result URLs
+ */
+function parseApiResults(provider, data) {
+  const items = provider === 'brave'
+    ? (data?.web?.results || [])
+    : (data?.items || data?.organic_results || data?.results || []);
+
+  return uniqueUrls(
+    items
+      .map((item) => normalizeResultUrl(item?.link || item?.url || '', 'https://example.com/'))
+      .filter(Boolean)
+  );
+}
+
+/**
+ * Ask an official search API for result URLs.
+ *
+ * @param {string} query - search query
+ * @param {number} count - wanted number of URLs
+ * @param {object} credentials - provider, key, cx, and timeout
+ * @returns {Promise<{urls: string[], error: string}>}
+ */
+async function fetchApiResults(query, count, credentials = {}) {
+  const request = buildApiRequest(credentials.provider, query, credentials);
+  if (!request) {
+    return { urls: [], error: 'An API provider, key, and required settings must be provided.' };
+  }
+
+  try {
+    const response = await fetch(request.url, {
+      headers: request.headers,
+      signal: AbortSignal.timeout(credentials.timeout || 15000),
+    });
+    if (!response.ok) return { urls: [], error: `API returned HTTP ${response.status}` };
+    const data = await response.json();
+    return { urls: parseApiResults(credentials.provider, data).slice(0, count), error: '' };
+  } catch (error) {
+    return { urls: [], error: String(error?.message || error) };
+  }
+}
+
+/**
  * Remove duplicate URLs while keeping the order they appeared in.
  *
  * @param {string[]} urls - URLs in the order they were found
@@ -316,7 +401,18 @@ async function collectResults(provider, query, count, timeoutMs) {
  * @param {number} timeoutMs - per-request timeout
  * @returns {Promise<{urls: string[], source: string, blocked: boolean, complete: boolean, notes: string[]}>}
  */
-async function searchWeb(query, count = 10, source = 'auto', timeoutMs = 15000) {
+async function searchWeb(query, count = 10, source = 'auto', timeoutMs = 15000, apiCredentials = null) {
+  if (source === 'api') {
+    const fromApi = await fetchApiResults(query, count, apiCredentials || {});
+    if (fromApi.urls.length) {
+      return { urls: fromApi.urls, source: 'api', blocked: false, complete: fromApi.urls.length >= count, notes: [] };
+    }
+    const notes = [fromApi.error || 'The search API returned no results'];
+    const fallback = await searchWeb(query, count, 'auto', timeoutMs, null);
+    fallback.notes = notes.concat(fallback.notes);
+    return fallback;
+  }
+
   const providers = source === 'duckduckgo' || source === 'google'
     ? [source]
     : ['google', 'duckduckgo'];
@@ -925,7 +1021,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
         <div id="history" class="history"></div>
         <div class="grid">
           <label class="field"><span>Results</span><input id="count" type="number" min="1" max="50" value="10"></label>
-          <label class="field"><span>Search source</span><select id="source"><option value="auto">Google, then DuckDuckGo</option><option value="google">Google only</option><option value="duckduckgo">DuckDuckGo only</option></select></label>
+          <label class="field"><span>Search source</span><select id="source"><option value="auto">Google, then DuckDuckGo</option><option value="google">Google only</option><option value="duckduckgo">DuckDuckGo only</option><option value="api">Official API</option></select></label>
           <label class="field"><span>Timeout (seconds)</span><input id="timeout" type="number" min="1" max="120" value="15"></label>
         </div>
         <div class="grid-2">
@@ -969,8 +1065,13 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
         <div class="group"><h3>Search</h3>
           <div class="grid-2">
             <label class="field"><span>Results per run</span><input id="s-count" type="number" min="1" max="50"></label>
-            <label class="field"><span>Search source</span><select id="s-source"><option value="auto">Google, then DuckDuckGo</option><option value="google">Google only</option><option value="duckduckgo">DuckDuckGo only</option></select></label>
+            <label class="field"><span>Search source</span><select id="s-source"><option value="auto">Google, then DuckDuckGo</option><option value="google">Google only</option><option value="duckduckgo">DuckDuckGo only</option><option value="api">Official API</option></select></label>
           </div>
+          <div class="grid-2">
+            <label class="field"><span>API provider</span><select id="s-api-provider"><option value="google-cse">Google Custom Search</option><option value="brave">Brave Search</option><option value="serpapi">SerpAPI</option></select></label>
+            <label class="field"><span>API key</span><input id="s-api-key" type="password" placeholder="Key (kept in this browser)"></label>
+          </div>
+          <label class="field" id="api-cx-field"><span>Search engine ID (cx)</span><input id="s-api-cx" type="text" placeholder="Only needed for Google Custom Search"></label>
           <label class="field"><span>Timeout in seconds</span><input id="s-timeout" type="number" min="1" max="120"></label>
         </div>
         <div class="group"><h3>Saving</h3>
@@ -1003,7 +1104,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
   var KEY = 'q2h.settings';
   var HISTORY_KEY = 'q2h.history';
   var HISTORY_LIMIT = 20;
-  var defaults = {baseFolder:__Q2H_DEFAULT_BASE__, askEachRun:true, autoFolder:false, count:10, source:'auto', timeout:15, saveManifest:true, addBaseTag:true, lastFolder:'', placement:'subfolder', output:'zip', autoDownload:false};
+  var defaults = {baseFolder:__Q2H_DEFAULT_BASE__, askEachRun:true, autoFolder:false, count:10, source:'auto', timeout:15, saveManifest:true, addBaseTag:true, lastFolder:'', placement:'subfolder', output:'zip', autoDownload:false, apiProvider:'google-cse', apiKey:'', apiCx:''};
   var settings;
   try { settings = Object.assign({}, defaults, JSON.parse(localStorage.getItem(KEY) || '{}')); }
   catch (error) { settings = Object.assign({}, defaults); }
@@ -1078,6 +1179,10 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     byId('s-manifest').checked = !!settings.saveManifest;
     byId('s-base-tag').checked = !!settings.addBaseTag;
     byId('s-auto-zip').checked = !!settings.autoDownload;
+    byId('s-api-provider').value = settings.apiProvider || 'google-cse';
+    byId('s-api-key').value = settings.apiKey || '';
+    byId('s-api-cx').value = settings.apiCx || '';
+    byId('api-cx-field').style.display = (settings.apiProvider || 'google-cse') === 'google-cse' ? '' : 'none';
   }
 
   function syncFolderField(){
@@ -1086,6 +1191,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     byId('folder').classList.toggle('hidden', !folderFallback);
     byId('folder').value = chosenFolder;
     byId('count').value = settings.count;
+    byId('source').innerHTML = byId('s-source').innerHTML;
     byId('source').value = settings.source;
     byId('timeout').value = settings.timeout;
     byId('placement').value = settings.placement;
@@ -1316,7 +1422,10 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
       saveManifest: !!settings.saveManifest,
       addBaseTag: !!settings.addBaseTag,
       placement: byId('placement').value,
-      output: byId('output').value
+      output: byId('output').value,
+      apiProvider: settings.apiProvider,
+      apiKey: settings.apiKey,
+      apiCx: settings.apiCx
     };
     rememberQuery(query);
     settings.placement = payload.placement;
@@ -1393,6 +1502,9 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     notify(message, true);
   }
 
+  byId('s-api-provider').addEventListener('change', function(){
+    byId('api-cx-field').style.display = byId('s-api-provider').value === 'google-cse' ? '' : 'none';
+  });
   byId('stop').addEventListener('click', cancelRun);
   byId('clear-history').addEventListener('click', function(){ saveHistory([]); });
   byId('pick').addEventListener('click', chooseFolder);
@@ -1422,6 +1534,9 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     settings.saveManifest = byId('s-manifest').checked;
     settings.addBaseTag = byId('s-base-tag').checked;
     settings.autoDownload = byId('s-auto-zip').checked;
+    settings.apiProvider = byId('s-api-provider').value;
+    settings.apiKey = byId('s-api-key').value.trim();
+    settings.apiCx = byId('s-api-cx').value.trim();
     saveSettings();
     syncFolderField();
     showScreen('search');
@@ -1953,7 +2068,7 @@ async function executeRun(jobId, job, options) {
       job.message = 'Cancelled.';
       return;
     }
-    const search = await searchWeb(options.query, options.count, options.source, options.timeout);
+    const search = await searchWeb(options.query, options.count, options.source, options.timeout, options.apiCredentials);
     if (search.urls.length === 0) {
       throw new Error(search.notes.join(' ') || 'No results found. Try another query or source.');
     }
@@ -2062,7 +2177,15 @@ async function handleRun(response, body) {
     return;
   }
 
-  const source = ['auto', 'google', 'duckduckgo'].includes(body.source) ? body.source : 'auto';
+  const source = ['auto', 'google', 'duckduckgo', 'api'].includes(body.source) ? body.source : 'auto';
+  const apiCredentials = source === 'api'
+    ? {
+      provider: ['google-cse', 'brave', 'serpapi'].includes(body.apiProvider) ? body.apiProvider : 'google-cse',
+      key: typeof body.apiKey === 'string' ? body.apiKey.trim() : '',
+      cx: typeof body.apiCx === 'string' ? body.apiCx.trim() : '',
+      timeout: clamp(Number(body.timeout) || 15, 1, 120) * 1000,
+    }
+    : null;
   const placement = ['subfolder', 'direct'].includes(body.placement) ? body.placement : 'subfolder';
   const output = ['zip', 'html', 'both'].includes(body.output) ? body.output : 'zip';
   const options = {
@@ -2075,6 +2198,7 @@ async function handleRun(response, body) {
     addBaseTag: body.addBaseTag !== false,
     placement,
     output,
+    apiCredentials,
   };
 
   const jobId = `job-${jobCounter += 1}`;
@@ -2285,4 +2409,4 @@ function startServer() {
 
 if (require.main === module) startServer();
 
-module.exports = { DEFAULT_BASE_DIR, slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, openFolderCommand, handleOpenFolder, findConflicts, retryFailedPages, conflictActionForRetry, searchSavedFiles, handleRetry, handleSearchFiles, askForDecision, handleDecision, handleCancel, createRunZip, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
+module.exports = { DEFAULT_BASE_DIR, slugify, buildApiRequest, parseApiResults, fetchApiResults, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, openFolderCommand, handleOpenFolder, findConflicts, retryFailedPages, conflictActionForRetry, searchSavedFiles, handleRetry, handleSearchFiles, askForDecision, handleDecision, handleCancel, createRunZip, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
