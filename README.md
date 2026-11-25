@@ -2,27 +2,17 @@
 
 Type a search query. Get ten real web pages saved as HTML files in a fresh folder. Download the whole folder as a ZIP if you want.
 
-That is the whole app. This README explains it slowly, in normal words, so you never have to guess what the code is trying to do.
-
-## Why this exists
-
-Sometimes you want the pages themselves, not just a list of links. You want to open them later, search inside them, keep them for a project, or hand them to somebody else. A browser bookmark does not do that. A screenshot does not do that. You need the actual HTML.
-
-This tool does the boring part for you. You give it one question. It finds the first ten useful pages, copies their HTML, and puts each copy in its own file. Every run gets a new folder, so nothing from yesterday gets overwritten by today.
+That is the whole app.
 
 ## The idea in one sentence
 
 You type a question, and the app answers with a folder of ten saved web pages plus a ZIP you can carry away.
 
 ## What you need
-
-- **Node.js 18 or newer.** Check with `node --version`.
-- **An internet connection**, because the app has to search and fetch pages.
-
-You do not need an API key. You do not need a paid account. You do not need to install any packages — the app uses only what Node.js already includes.
+- **Node.js 18 or newer.** Check with `node --version`
+You do not need an API key for normal use. You do not need a paid account. You do not need to install any packages — the app uses only what Node.js already includes. An official search API is optional and is mainly useful on a hosted server, where search engines often block automated requests.
 
 ## Run it on your computer
-
 Open a terminal in this folder and type:
 
 ```bash
@@ -56,13 +46,18 @@ The app has exactly two screens. Nothing else.
 This is where you work.
 
 - A box for your query, plus the number of results, search source, and timeout.
+- A short list of **Recent searches** under the query box. Click a chip to refill the box, or Clear to remove the list.
 - A **Placement** select: `New folder each run` or `Directly in chosen folder`.
 - An **Output** select: `ZIP only`, `HTML files only`, or `HTML files and ZIP`. ZIP only is the default.
 - A **Choose folder** button. It opens your operating system's own folder dialog on Windows or macOS. The chosen path is shown next to the button. If no dialog is available, a text box appears so you can type a path instead.
 - A **Run** button.
-- A progress line, like `Fetching 4/10…`, so you know it is alive. If files with the same names already exist, the run pauses and asks what to do.
+- A progress line, like `Fetching 4/10…`, so you know it is alive. A **Stop this run** button cancels it at a safe point. If files with the same names already exist, the run pauses and asks what to do.
 - A list of the saved files with a status for each one. A failed page still gets a small stub file, so the count stays at ten.
+- A **Retry failed pages** button when any file failed. It uses the saved URLs and tries only those pages again.
+- A search box that looks inside the saved HTML files and shows short snippets linking straight to the matching file.
 - A **Download ZIP** button, shown only when your Output setting includes a ZIP.
+- An **Open folder** button that reveals the run in Explorer or Finder on a desktop machine.
+- A **Re-run this query** button that repeats the last search with the same settings, and a **New search** button.
 - A **Settings** link.
 
 ### Screen 2 — Settings
@@ -75,10 +70,14 @@ This is where you decide how the app behaves. The choices are saved in your brow
 | Ask location each run | Shows the Save location box before every run | on |
 | Auto-use last folder | Remembers the folder and skips the question | off |
 | Results per run | How many pages to save | 10 |
-| Search source | Where results come from | Google with DuckDuckGo fallback |
+| Search source | Where results come from: Google with DuckDuckGo fallback, one engine only, or an official API | Google with DuckDuckGo fallback |
+| API provider | Google Custom Search, Brave Search, or SerpAPI | Google Custom Search |
+| API key | Key for the chosen API, kept only in this browser | empty |
+| Search engine ID | The `cx` value, needed only by Google Custom Search | empty |
 | Timeout | How long to wait on one slow page | 15 seconds |
 | Save manifest.json | Writes a small report of the run | on |
 | Add base tag | Keeps relative links and images working offline | on |
+| Auto-download ZIP | Starts the ZIP download when a run finishes, if the Output includes a ZIP | off |
 
 "Auto-use last folder" wins over "Ask location each run" when both are on. Think of it as saying: stop asking, you already know where to put things.
 
@@ -97,7 +96,9 @@ Here is the whole story, in order.
 7. It writes the HTML files. A small `<base>` tag is added so pictures and links that use relative paths still point to the right place when you open a file offline. It also writes `manifest.json` unless you turned that off.
 8. If your Output includes a ZIP, it builds the archive and saves a copy beside the files. The screen then shows the files and offers the ZIP button when relevant.
 
-One failed page does not ruin the run. You still get ten files, and the manifest tells you which one could not be fetched.
+One failed page does not ruin the run. You still get ten files, and the manifest tells you which one could not be fetched. The **Retry failed pages** button later tries just those URLs again and updates the manifest.
+
+If you chose an official API in Settings, step 2 uses that service instead. The key travels from the browser to the server and is never included in a result or a saved file. If the API fails or returns nothing, the app falls back to Google and DuckDuckGo and writes the reason into the notes shown on the results screen.
 
 ## Where the files go
 
