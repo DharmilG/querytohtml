@@ -946,7 +946,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
         <div class="note hidden" id="results-note"></div>
         <div class="meta" id="results-meta"></div>
         <ul class="files" id="file-list"></ul>
-        <div class="actions"><button id="zip" class="primary" type="button" style="width:auto">Download ZIP</button><button id="again" class="secondary" type="button">New search</button></div>
+        <div class="actions"><button id="zip" class="primary" type="button" style="width:auto">Download ZIP</button><button id="rerun" class="secondary" type="button">Re-run this query</button><button id="again" class="secondary" type="button">New search</button></div>
       </section>
     </section>
 
@@ -1140,6 +1140,22 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     return (bytes / 1024).toFixed(1) + ' KB';
   }
 
+  function rerunLast(){
+    if (!lastRun) return;
+    byId('query').value = lastRun.query;
+    byId('count').value = lastRun.files.length || settings.count;
+    if (lastRun.source) byId('source').value = lastRun.source;
+    byId('placement').value = lastRun.placement || settings.placement;
+    byId('output').value = lastRun.output || settings.output;
+    settings.placement = byId('placement').value;
+    settings.output = byId('output').value;
+    syncFolderField();
+    saveSettings();
+    showScreen('search');
+    byId('results').classList.add('hidden');
+    startRun();
+  }
+
   function renderResults(result){
     lastRun = result;
     byId('results').classList.remove('hidden');
@@ -1298,6 +1314,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
   byId('nav-settings').addEventListener('click', function(){ renderSettings(); showScreen('settings'); });
   byId('run-form').addEventListener('submit', function(event){ event.preventDefault(); startRun(); });
   byId('again').addEventListener('click', function(){ byId('results').classList.add('hidden'); byId('query').focus(); });
+  byId('rerun').addEventListener('click', rerunLast);
   byId('zip').addEventListener('click', function(){
     if (!lastRun) return;
     window.location.href = '/api/zip?run=' + encodeURIComponent(lastRun.name);
