@@ -946,7 +946,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
         <div class="note hidden" id="results-note"></div>
         <div class="meta" id="results-meta"></div>
         <ul class="files" id="file-list"></ul>
-        <div class="actions"><button id="zip" class="primary" type="button" style="width:auto">Download ZIP</button><button id="rerun" class="secondary" type="button">Re-run this query</button><button id="again" class="secondary" type="button">New search</button></div>
+        <div class="actions"><button id="zip" class="primary" type="button" style="width:auto">Download ZIP</button><button id="open-folder" class="secondary" type="button">Open folder</button><button id="rerun" class="secondary" type="button">Re-run this query</button><button id="again" class="secondary" type="button">New search</button></div>
       </section>
     </section>
 
@@ -1123,6 +1123,18 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     fetch('/api/cancel?id=' + encodeURIComponent(jobId), {method:'POST'})
       .then(function(response){ return response.json(); })
       .then(function(data){ if (!data.ok) notify(data.error || 'Could not stop the run.', true); })
+      .catch(function(error){ notify(error.message, true); });
+  }
+
+  function openRunFolder(){
+    if (!lastRun) return;
+    fetch('/api/open-folder', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({run:lastRun.name})
+    })
+      .then(function(response){ return response.json().then(function(data){ return {ok:response.ok, data:data}; }); })
+      .then(function(out){ if (!out.ok) notify(out.data.error || 'Could not open the folder.', true); })
       .catch(function(error){ notify(error.message, true); });
   }
 
@@ -1315,6 +1327,7 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
   byId('run-form').addEventListener('submit', function(event){ event.preventDefault(); startRun(); });
   byId('again').addEventListener('click', function(){ byId('results').classList.add('hidden'); byId('query').focus(); });
   byId('rerun').addEventListener('click', rerunLast);
+  byId('open-folder').addEventListener('click', openRunFolder);
   byId('zip').addEventListener('click', function(){
     if (!lastRun) return;
     window.location.href = '/api/zip?run=' + encodeURIComponent(lastRun.name);
@@ -1512,6 +1525,47 @@ function handleCancel(response, url) {
   if (decision) decision('rename');
 
   sendJson(response, 200, { ok: true });
+}
+
+/**
+ * Describe the command that opens a folder in the operating system.
+ *
+ * @param {string} platform - Node platform name
+ * @param {string} folder - absolute folder to reveal
+ * @returns {{command: string, args: string[]}|null} command, or null if unsupported
+ */
+function openFolderCommand(platform, folder) {
+  if (platform === 'win32') return { command: 'explorer.exe', args: [folder] };
+  if (platform === 'darwin') return { command: 'open', args: [folder] };
+  return null;
+}
+
+/**
+ * Open a run's folder on the desktop, if the host has a desktop.
+ *
+ * @param {http.ServerResponse} response - the response to answer
+ * @param {object} body - request body containing the run name
+ * @returns {Promise<void>}
+ */
+async function handleOpenFolder(response, body) {
+  const run = runs.get(typeof body.run === 'string' ? body.run : '');
+  if (!run) {
+    sendJson(response, 404, { error: 'Unknown run.' });
+    return;
+  }
+
+  const command = openFolderCommand(process.platform, run.folder);
+  if (!command) {
+    sendJson(response, 400, { error: 'No desktop is available to open the folder.' });
+    return;
+  }
+
+  try {
+    await execFileAsync(command.command, command.args, { timeout: 10000 });
+    sendJson(response, 200, { ok: true, path: run.folder });
+  } catch (error) {
+    sendJson(response, 500, { error: String(error?.message || error) });
+  }
 }
 
 /**
@@ -1927,6 +1981,11 @@ function startServer() {
         return;
       }
 
+      if (request.method === 'POST' && url.pathname === '/api/open-folder') {
+        await handleOpenFolder(response, await readJson(request));
+        return;
+      }
+
       if (request.method === 'POST' && url.pathname === '/api/pick-folder') {
         await handlePickFolder(response);
         return;
@@ -1976,4 +2035,4 @@ function startServer() {
 
 if (require.main === module) startServer();
 
-module.exports = { DEFAULT_BASE_DIR, slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, findConflicts, askForDecision, handleDecision, handleCancel, createRunZip, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
+module.exports = { DEFAULT_BASE_DIR, slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, openFolderCommand, handleOpenFolder, findConflicts, askForDecision, handleDecision, handleCancel, createRunZip, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
