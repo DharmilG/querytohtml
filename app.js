@@ -862,6 +862,12 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
 .history-head span{font-size:12px;color:var(--muted)}
 .history-head button{border:0;background:transparent;color:var(--muted);font:inherit;font-size:12px;cursor:pointer;padding:0}
 .history-head button:hover{color:var(--bad)}
+.file-search{display:flex;gap:10px;margin:0 0 16px}
+.file-search input{flex:1}
+.search-hits{list-style:none;padding:0;margin:0 0 18px;display:grid;gap:8px}
+.search-hits li{background:#f8fafc;border:1px solid var(--line);border-radius:11px;padding:10px 13px;font-size:13px}
+.search-hits a{color:var(--accent);font-weight:600;text-decoration:none}
+.search-hits p{margin:5px 0 0;color:var(--muted);line-height:1.5}
 .hidden{display:none!important}
 .progress-top{display:flex;justify-content:space-between;gap:12px;font-size:13px;margin-bottom:10px}
 .progress-top strong{color:var(--accent)}
@@ -945,8 +951,10 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
         <p class="sub" id="results-sub"></p>
         <div class="note hidden" id="results-note"></div>
         <div class="meta" id="results-meta"></div>
+        <div class="file-search"><input id="file-search" type="search" placeholder="Search inside these saved pages"><button id="search-files" class="secondary" type="button">Search</button></div>
+        <ul id="search-hits" class="search-hits hidden"></ul>
         <ul class="files" id="file-list"></ul>
-        <div class="actions"><button id="zip" class="primary" type="button" style="width:auto">Download ZIP</button><button id="open-folder" class="secondary" type="button">Open folder</button><button id="rerun" class="secondary" type="button">Re-run this query</button><button id="again" class="secondary" type="button">New search</button></div>
+        <div class="actions"><button id="retry" class="secondary hidden" type="button">Retry failed pages</button><button id="zip" class="primary" type="button" style="width:auto">Download ZIP</button><button id="open-folder" class="secondary" type="button">Open folder</button><button id="rerun" class="secondary" type="button">Re-run this query</button><button id="again" class="secondary" type="button">New search</button></div>
       </section>
     </section>
 
@@ -1128,6 +1136,68 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
       .catch(function(error){ notify(error.message, true); });
   }
 
+  function retryFailed(){
+    if (!lastRun) return;
+    var failed = lastRun.files.filter(function(file){ return !file.ok && file.url; }).map(function(file){ return file.name; });
+    if (!failed.length) { notify('No failed pages to retry.'); return; }
+    byId('retry').disabled = true;
+    byId('retry').textContent = 'Retrying…';
+    fetch('/api/retry', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({run:lastRun.name, files:failed})
+    })
+      .then(function(response){ return response.json().then(function(data){ return {ok:response.ok, data:data}; }); })
+      .then(function(out){
+        byId('retry').disabled = false;
+        byId('retry').textContent = 'Retry failed pages';
+        if (!out.ok) { notify(out.data.error || 'Retry failed.', true); return; }
+        out.data.files.forEach(function(updated){
+          var entry = lastRun.files.find(function(file){ return file.name === updated.name || file.url === updated.url; });
+          if (entry) Object.assign(entry, updated);
+        });
+        renderResults(lastRun);
+        notify('Retried ' + out.data.files.length + ' pages.');
+      })
+      .catch(function(error){
+        byId('retry').disabled = false;
+        byId('retry').textContent = 'Retry failed pages';
+        notify(error.message, true);
+      });
+  }
+
+  function searchFiles(){
+    if (!lastRun) return;
+    var term = byId('file-search').value.trim();
+    if (!term) { notify('Type something to search for.', true); return; }
+    fetch('/api/search-files', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({run:lastRun.name, term:term})
+    })
+      .then(function(response){ return response.json(); })
+      .then(function(data){
+        var box = byId('search-hits');
+        box.innerHTML = '';
+        data.hits.forEach(function(hit){
+          var item = document.createElement('li');
+          var link = document.createElement('a');
+          link.textContent = hit.name;
+          link.href = '/view/' + encodeURIComponent(lastRun.name) + '/' + encodeURIComponent(hit.name);
+          link.target = '_blank';
+          link.rel = 'noopener';
+          var snippet = document.createElement('p');
+          snippet.textContent = hit.snippet;
+          item.appendChild(link);
+          item.appendChild(snippet);
+          box.appendChild(item);
+        });
+        box.classList.remove('hidden');
+        if (!data.hits.length) notify('No matches in these pages.');
+      })
+      .catch(function(error){ notify(error.message, true); });
+  }
+
   function openRunFolder(){
     if (!lastRun) return;
     fetch('/api/open-folder', {
@@ -1199,6 +1269,8 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
     } else {
       note.classList.add('hidden');
     }
+
+    byId('retry').classList.toggle('hidden', !result.files.some(function(file){ return !file.ok && file.url; }));
 
     var list = byId('file-list');
     list.innerHTML = '';
@@ -1332,6 +1404,8 @@ input:focus,textarea:focus,select:focus{border-color:var(--accent);box-shadow:0 
   byId('run-form').addEventListener('submit', function(event){ event.preventDefault(); startRun(); });
   byId('again').addEventListener('click', function(){ byId('results').classList.add('hidden'); byId('query').focus(); });
   byId('rerun').addEventListener('click', rerunLast);
+  byId('retry').addEventListener('click', retryFailed);
+  byId('search-files').addEventListener('click', searchFiles);
   byId('open-folder').addEventListener('click', openRunFolder);
   byId('zip').addEventListener('click', function(){
     if (!lastRun) return;
@@ -1510,6 +1584,58 @@ async function pickFolder() {
 }
 
 /**
+ * Retry the failed files of a completed run.
+ *
+ * @param {http.ServerResponse} response - the response to answer
+ * @param {object} body - request body containing run and file names
+ * @returns {Promise<void>}
+ */
+async function handleRetry(response, body) {
+  const run = runs.get(typeof body.run === 'string' ? body.run : '');
+  if (!run) {
+    sendJson(response, 404, { error: 'Unknown run.' });
+    return;
+  }
+
+  const names = Array.isArray(body.files)
+    ? body.files.filter((name) => typeof name === 'string').slice(0, 50)
+    : [];
+  if (names.length === 0) {
+    sendJson(response, 400, { error: 'Choose at least one file to retry.' });
+    return;
+  }
+
+  try {
+    const updated = await retryFailedPages(run.folder, names, 15000);
+    sendJson(response, 200, { ok: true, files: updated });
+  } catch (error) {
+    sendJson(response, 500, { error: String(error?.message || error) });
+  }
+}
+
+/**
+ * Search the saved HTML files of a completed run.
+ *
+ * @param {http.ServerResponse} response - the response to answer
+ * @param {object} body - request body containing run and search term
+ * @returns {Promise<void>}
+ */
+async function handleSearchFiles(response, body) {
+  const run = runs.get(typeof body.run === 'string' ? body.run : '');
+  if (!run) {
+    sendJson(response, 404, { error: 'Unknown run.' });
+    return;
+  }
+
+  try {
+    const hits = await searchSavedFiles(run.folder, body.term || '');
+    sendJson(response, 200, { hits });
+  } catch (error) {
+    sendJson(response, 500, { error: String(error?.message || error) });
+  }
+}
+
+/**
  * Mark a running job as cancelled.
  *
  * The flag is checked by executeRun() between pages and before writing,
@@ -1670,6 +1796,114 @@ function handleDecision(response, url, body) {
 
   finish(choice);
   sendJson(response, 200, { ok: true });
+}
+
+/**
+ * Re-download pages that failed in an earlier run.
+ *
+ * The failed URLs are stored in the manifest, so this function only needs
+ * the run folder and the names to retry. It writes new files under the
+ * same conflict rule as the original run and updates the manifest with
+ * the new status and a retry timestamp.
+ *
+ * @param {string} folder - run folder
+ * @param {string[]} names - manifest file entries to retry
+ * @param {number} timeoutMs - per-page timeout
+ * @param {object} options - base tag setting
+ * @returns {Promise<Array<object>>} refreshed file entries
+ */
+async function retryFailedPages(folder, names, timeoutMs = 15000, options = {}) {
+  const manifestPath = resolveInside(folder, 'manifest.json');
+  const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+  const targets = new Set(names);
+  const results = [];
+
+  for (const file of manifest.files || []) {
+    if (!targets.has(file.name) || file.ok || !file.url) continue;
+
+    const page = await fetchPage(file.url, timeoutMs);
+    page.url = file.url;
+    const content = page.ok
+      ? ((options.addBaseTag !== false) ? injectBaseTag(page.html, page.url) : page.html)
+      : errorStub(page.url, page.error);
+
+    let finalName = file.name;
+    if (await conflictActionForRetry(file.name, folder) === 'rename') {
+      finalName = await uniqueOnDisk(folder, file.name);
+    }
+    await fs.writeFile(resolveInside(folder, finalName), content, 'utf8');
+    file.name = finalName;
+    file.ok = Boolean(page.ok);
+    file.error = page.error || '';
+    file.bytes = Buffer.byteLength(content, 'utf8');
+    file.retriedAt = new Date().toISOString();
+    results.push(file);
+  }
+
+  manifest.retriedAt = new Date().toISOString();
+  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+  return results;
+}
+
+/**
+ * Choose a safe conflict action for a retried file.
+ *
+ * A retry writes over the error stub that the earlier run created, so
+ * overwrite is the natural choice. If that stub has been renamed since,
+ * a fresh name is used instead.
+ *
+ * @param {string} name - planned file name
+ * @param {string} folder - run folder
+ * @returns {'overwrite'|'rename'} chosen action
+ */
+async function conflictActionForRetry(name, folder) {
+  // Retry targets are the error stubs written by the earlier run.
+  // Overwriting them is safe; the check exists for callers that pass a
+  // name the earlier run did not create.
+  try {
+    await fs.access(resolveInside(folder, name));
+    return 'overwrite';
+  } catch {
+    return 'rename';
+  }
+}
+
+/**
+ * Find text inside the saved HTML files of one run.
+ *
+ * Tags are stripped so markup does not drown out real matches, and a
+ * short snippet is returned around each hit. This is a small local
+ * search, not a search engine: it only looks at files from this run.
+ *
+ * @param {string} folder - run folder
+ * @param {string} term - text to look for
+ * @param {number} limit - most files to return
+ * @returns {Promise<Array<{name: string, snippet: string}>>}
+ */
+async function searchSavedFiles(folder, term, limit = 20) {
+  const needle = String(term || '').trim().toLocaleLowerCase();
+  if (!needle) return [];
+
+  const names = (await fs.readdir(folder)).filter((file) => /\.html$/i.test(file)).sort();
+  const hits = [];
+
+  for (const name of names) {
+    const raw = await fs.readFile(resolveInside(folder, name), 'utf8');
+    const text = raw.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const at = text.toLocaleLowerCase().indexOf(needle);
+    if (at === -1) continue;
+
+    const start = Math.max(0, at - 60);
+    const snippet = (start ? '…' : '') + text.slice(start, start + 180).trim() + '…';
+    hits.push({ name, snippet });
+    if (hits.length >= limit) break;
+  }
+
+  return hits;
 }
 
 /**
@@ -1997,6 +2231,16 @@ function startServer() {
         return;
       }
 
+      if (request.method === 'POST' && url.pathname === '/api/retry') {
+        await handleRetry(response, await readJson(request));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/search-files') {
+        await handleSearchFiles(response, await readJson(request));
+        return;
+      }
+
       if (request.method === 'POST' && url.pathname === '/api/cancel') {
         handleCancel(response, url);
         return;
@@ -2041,4 +2285,4 @@ function startServer() {
 
 if (require.main === module) startServer();
 
-module.exports = { DEFAULT_BASE_DIR, slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, openFolderCommand, handleOpenFolder, findConflicts, askForDecision, handleDecision, handleCancel, createRunZip, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
+module.exports = { DEFAULT_BASE_DIR, slugify, resolveInside, runFolderName, decodeHtmlEntities, extractHrefs, normalizeResultUrl, uniqueUrls, parseGoogleResults, parseDuckDuckGoResults, looksBlocked, fetchSearchPage, collectResults, searchWeb, readLimitedBody, fetchPage, injectBaseTag, escapeHtml, errorStub, pageFileName, planFileNames, uniqueOnDisk, writeRunFiles, crc32, dosDateTime, buildZip, PAGE, sendJson, readJson, clamp, folderPickerCommand, pickFolder, handlePickFolder, openFolderCommand, handleOpenFolder, findConflicts, retryFailedPages, conflictActionForRetry, searchSavedFiles, handleRetry, handleSearchFiles, askForDecision, handleDecision, handleCancel, createRunZip, executeRun, handleRun, handleStatus, handleZip, handleView, startServer };
